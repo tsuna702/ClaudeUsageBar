@@ -22,8 +22,9 @@ enum Notify {
     // 창마다 "초기화 시각 | 마지막으로 알린 단계"를 저장해 같은 알림을 반복하지 않음
     static func check(_ p: Provider, _ q: Quota) {
         let d = UserDefaults.standard
-        for (name, label, b) in [("세션", L("세션", "session"), q.session), ("주간", L("주간", "weekly"), q.weekly)] {
+        for (name, defaultLabel, b) in [("세션", L("세션", "session"), q.session), ("주간", L("주간", "weekly"), q.weekly)] {
             guard let b else { continue }
+            let label = b.label ?? defaultLabel
             let key = "notified.\(p.rawValue).\(name)"
             let reset = Int(b.resetsAt?.timeIntervalSince1970 ?? 0)
             let level = Theme.level(b.percent) + (b.percent >= 100 ? 1 : 0)   // 0 보통, 1 주의, 2 위험, 3 소진

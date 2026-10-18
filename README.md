@@ -2,7 +2,7 @@
 
 [한국어](README.ko.md)
 
-A macOS menu bar app that shows your Claude and Codex usage limits.
+A macOS menu bar app that shows your AI usage limits: Claude, Codex, Gemini, Antigravity, Cursor, Grok, OpenAI API and Cloudflare Workers AI.
 
 ## Features
 
@@ -28,6 +28,14 @@ A macOS menu bar app that shows your Claude and Codex usage limits.
 | Claude limits | `api.anthropic.com/api/oauth/usage`, using the Claude Code login in the Keychain |
 | Codex limits | `chatgpt.com/backend-api/wham/usage`, using `~/.codex/auth.json` |
 | Tokens, cost, working time | Local logs in `~/.claude/projects` and `~/.codex/sessions` |
+| Gemini | Gemini CLI login (`~/.gemini/oauth_creds.json`) → Code Assist quota API (internal) |
+| Antigravity | The app's local language server, while Antigravity is running (internal) |
+| Cursor | The Cursor app's login → `cursor.com/api/usage-summary` (internal) |
+| Grok | `grok agent stdio` → `x.ai/billing` (requires `grok login`) |
+| OpenAI API | Official Admin API (`/v1/organization/costs`, `/usage/completions`) with an Admin API key |
+| Cloudflare AI | Official GraphQL Analytics API (`aiInferenceAdaptiveGroups`) with an API token and account ID |
+
+Services other than Claude and Codex are off by default; turn them on in Settings → Accounts. Gemini, Antigravity and Cursor use undocumented internal APIs that may change without notice. **Google has said that using Gemini CLI login in other software may violate its policy**, so turn Gemini on only if you accept the risk of account restrictions.
 
 Cost is calculated at public API prices, so it is not what you pay on a subscription plan. When the Claude token expires, the app refreshes it the same way Claude Code does and saves it back to the Keychain.
 

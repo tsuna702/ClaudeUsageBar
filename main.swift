@@ -11,39 +11,146 @@ import ServiceManagement
 struct Bucket {
     let percent: Double
     let resetsAt: Date?
+    var label: String? = nil     // 카드 제목 (없으면 세션/주간)
+    var short: String? = nil     // 메뉴 막대 라벨 (없으면 5h/7d)
+    var window: Double? = nil    // 창 길이(초), 소진 예상·추이 그래프에 사용
 }
 
 struct Quota {
-    var session: Bucket?
-    var weekly: Bucket?
+    var session: Bucket?         // 짧은 창 (첫 번째 한도)
+    var weekly: Bucket?          // 긴 창 (두 번째 한도)
     var extras: [(String, Bucket)] = []      // 주간 Opus 등 추가 한도
     var breakdown: [(String, Double)] = []   // 주간 사용 비중
     var plan: String?
     var email: String?
     var limitReached = false
-    var extras2: [(label: String, value: String)] = []   // 추가 사용량 · 크레딧
+    var extras2: [(label: String, value: String)] = []   // 추가 사용량 · 크레딧 등 정보 줄
+    var headline: String?        // 한도 %가 없는 서비스의 메뉴 막대 문구 (예: 이번 달 비용)
 
     static let sample = Quota(session: Bucket(percent: 12, resetsAt: nil), weekly: Bucket(percent: 45, resetsAt: nil))
 }
 
-enum Provider: String, CaseIterable {
-    case claude, codex
+// 로그인 방식
+enum LoginKind { case cli, app, apiKey }
 
-    var name: String { self == .claude ? "Claude" : "Codex" }
-    var icon: String { self == .claude ? "✳︎" : "◎" }
-    var webURL: URL {
-        URL(string: self == .claude ? "https://claude.ai/settings/usage" : "https://chatgpt.com/codex/settings/usage")!
+enum Provider: String, CaseIterable {
+    case claude, codex, gemini, antigravity, cursor, grok, openai, cloudflare
+
+    var name: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .gemini: return "Gemini"
+        case .antigravity: return "Antigravity"
+        case .cursor: return "Cursor"
+        case .grok: return "Grok"
+        case .openai: return "OpenAI API"
+        case .cloudflare: return "Cloudflare AI"
+        }
     }
+
+    // 글자 아이콘 (로고가 없을 때)
+    var icon: String {
+        switch self {
+        case .claude: return "✳︎"
+        case .codex: return "◎"
+        case .gemini: return "✦"
+        case .antigravity: return "◬"
+        case .cursor: return "➤"
+        case .grok: return "𝕏"
+        case .openai: return "⬡"
+        case .cloudflare: return "☁︎"
+        }
+    }
+
+    // 탭 등에 쓰는 SF Symbol
+    var symbol: String {
+        switch self {
+        case .claude: return "sparkle"
+        case .codex: return "chevron.left.forwardslash.chevron.right"
+        case .gemini: return "sparkles"
+        case .antigravity: return "triangle"
+        case .cursor: return "cursorarrow"
+        case .grok: return "xmark"
+        case .openai: return "hexagon"
+        case .cloudflare: return "cloud"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .claude: return .orange
+        case .codex: return .teal
+        case .gemini: return .blue
+        case .antigravity: return .indigo
+        case .cursor: return .gray
+        case .grok: return .primary
+        case .openai: return .green
+        case .cloudflare: return .orange
+        }
+    }
+
+    var webURL: URL {
+        let s: String
+        switch self {
+        case .claude: s = "https://claude.ai/settings/usage"
+        case .codex: s = "https://chatgpt.com/codex/settings/usage"
+        case .gemini: s = "https://aistudio.google.com/usage"
+        case .antigravity: s = "https://antigravity.google"
+        case .cursor: s = "https://cursor.com/dashboard?tab=usage"
+        case .grok: s = "https://grok.com"
+        case .openai: s = "https://platform.openai.com/usage"
+        case .cloudflare: s = "https://dash.cloudflare.com/?to=/:account/ai/workers-ai"
+        }
+        return URL(string: s)!
+    }
+
+    var loginKind: LoginKind {
+        switch self {
+        case .antigravity, .cursor: return .app
+        case .openai, .cloudflare: return .apiKey
+        default: return .cli
+        }
+    }
+
+    // 이 맥의 로컬 기록(토큰·비용·작업 시간)을 읽을 수 있는 서비스
+    var hasLocalLogs: Bool { self == .claude || self == .codex }
+    // 저장된 계정 전환을 지원하는 서비스
+    var supportsSavedAccounts: Bool { self == .claude || self == .codex }
+
     var enabledKey: String { "show_\(rawValue)" }
+
+    // 공식 앱 번들 ID 후보 (로고·설치 확인용)
+    var bundleIDs: [String] {
+        switch self {
+        case .claude: return ["com.anthropic.claudefordesktop"]
+        case .codex: return ["com.openai.codex", "com.openai.chat"]
+        case .cursor: return ["com.todesktop.230313mzl4w4u92"]
+        case .antigravity: return ["com.google.antigravity"]
+        case .grok: return ["ai.x.grok"]
+        default: return []
+        }
+    }
+
+    var appURL: URL? {
+        if let u = bundleIDs.lazy.compactMap({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }).first { return u }
+        // 번들 ID를 모를 때는 이름으로 찾음
+        let names: [String] = self == .antigravity ? ["Antigravity"] : self == .cursor ? ["Cursor"] : []
+        for n in names {
+            for dir in ["/Applications", NSHomeDirectory() + "/Applications"] {
+                let path = "\(dir)/\(n).app"
+                if FileManager.default.fileExists(atPath: path) { return URL(fileURLWithPath: path) }
+            }
+        }
+        return nil
+    }
 
     // 설치된 공식 앱의 아이콘을 로고로 사용 (없으면 nil → 글자 아이콘)
     static var logoCache: [Provider: NSImage?] = [:]
     var logo: NSImage? {
         if let c = Provider.logoCache[self] { return c }
         if ProcessInfo.processInfo.environment["USAGE_NOLOGO"] != nil { return nil }
-        let ids = self == .claude ? ["com.anthropic.claudefordesktop"] : ["com.openai.codex", "com.openai.chat"]
-        let img = ids.lazy.compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
-            .first.map { flatIcon(NSWorkspace.shared.icon(forFile: $0.path)) }
+        let img = appURL.map { flatIcon(NSWorkspace.shared.icon(forFile: $0.path)) }
         Provider.logoCache[self] = img
         return img
     }
@@ -342,6 +449,8 @@ enum Pref {
         UserDefaults.standard.register(defaults: [
             refreshMinutes: 5, colorWarnings: true, orangeAt: 70, redAt: 90,
             Provider.claude.enabledKey: true, Provider.codex.enabledKey: true,
+            Provider.gemini.enabledKey: false, Provider.antigravity.enabledKey: false, Provider.cursor.enabledKey: false,
+            Provider.grok.enabledKey: false, Provider.openai.enabledKey: false, Provider.cloudflare.enabledKey: false,
             Notify.enabledKey: true, Notify.resetKey: true,
             showIcon: true, useLogo: true, showName: false, showSession: true, showSessionLeft: false, showLeftLabel: true, showWeekly: true,
             showLabels: false, showReset: false, useGauge: false, spacing: 10.0,
@@ -387,18 +496,27 @@ enum Format {
         if Pref.on(Pref.showName) { head.append(p.name) }
 
         var values: [String] = []
+        // 한도 %가 없는 서비스(예: OpenAI API 월 비용)는 대표 문구를 보여줌
+        if q.session == nil, q.weekly == nil {
+            let parts = head + (q.headline.map { [$0] } ?? [])
+            return parts.isEmpty ? p.icon : parts.joined(separator: " ")
+        }
         let used = Pref.on(Pref.showSession), left = Pref.on(Pref.showSessionLeft)
-        if used || left {
+        if (used || left), q.session != nil {
             var pieces: [String] = []
             if used { pieces.append(value(q.session)) }
             let leftLabel = Pref.on(Pref.showLeftLabel)
             if left { pieces.append(leftLabel ? L("남음 \(value(remaining(q.session)))", "\(value(remaining(q.session))) left") : value(remaining(q.session))) }
             // '남음' 글자가 없으면 사용/남은 값을 '/'로 구분
-            var s = (labels ? "5h " : "") + pieces.joined(separator: leftLabel ? " " : "/")
+            var s = (labels ? (q.session?.short ?? "5h") + " " : "") + pieces.joined(separator: leftLabel ? " " : "/")
             if Pref.on(Pref.showReset) { s += " (\(shortReset(q.session)))" }
             values.append(s)
         }
-        if Pref.on(Pref.showWeekly) { values.append((labels ? "7d " : "") + value(q.weekly)) }
+        if Pref.on(Pref.showWeekly), q.weekly != nil { values.append((labels ? (q.weekly?.short ?? "7d") + " " : "") + value(q.weekly)) }
+        // 켜 둔 항목이 이 서비스에 없으면 있는 값 하나라도 보여줌
+        if values.isEmpty, used || left || Pref.on(Pref.showWeekly), let b = q.session ?? q.weekly {
+            values.append((labels ? (b.short ?? "") + " " : "") + value(b))
+        }
 
         let parts = head + (values.isEmpty ? [] : [values.joined(separator: " · ")])
         return parts.isEmpty ? p.icon : parts.joined(separator: " ")
@@ -490,12 +608,10 @@ struct SettingsView: View {
     @AppStorage(Pref.colorWarnings) var colorWarnings = true
     @AppStorage(Pref.orangeAt) var orangeAt = 70.0
     @AppStorage(Pref.redAt) var redAt = 90.0
-    @AppStorage(Provider.claude.enabledKey) var showClaude = true
-    @AppStorage(Provider.codex.enabledKey) var showCodex = true
 
     func color(_ level: Int) -> Color { [Color.primary, .orange, .red][level] }
 
-    @ObservedObject var nav = SettingsNav()
+    @ObservedObject var nav = SettingsNav.shared
 
     var body: some View {
         HStack(spacing: 0) {
@@ -618,8 +734,7 @@ struct SettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         Section(L("표시할 서비스", "Services")) {
-            Toggle("✳︎ Claude", isOn: $showClaude).disabled(showClaude && !showCodex)
-            Toggle("◎ Codex", isOn: $showCodex).disabled(showCodex && !showClaude)
+            ForEach(Provider.allCases, id: \.self) { p in ServiceToggle(provider: p) }
         }
     }
 
@@ -679,6 +794,7 @@ enum SettingsPage: CaseIterable {
 
 // 설정창에서 고른 항목 (@State 대신)
 final class SettingsNav: ObservableObject {
+    static let shared = SettingsNav()
     @Published var page: SettingsPage = .general
 }
 
@@ -695,10 +811,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let ui = DashState()
     var rightMenu = NSMenu()
     var pending = 0
+    var enabledSet = Set<Provider>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Pref.registerDefaults()
         Notify.requestPermission()
+        autoEnableDetected()
         statusItem.button?.title = "✳︎ …"
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusClicked(_:))
@@ -741,6 +859,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.rebuildMenu()
             self?.scheduleTimer()
             self?.settingsWindow?.title = L("사용량 설정", "UsageBar Settings")
+            // 새로 켠 서비스가 있으면 바로 불러옴
+            if let self, Set(Provider.allCases.filter(Pref.enabled)).subtracting(self.enabledSet).isEmpty == false {
+                self.refresh()
+            }
         }
     }
 
@@ -750,6 +872,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timerMinutes = minutes
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(minutes * 60), repeats: true) { [weak self] _ in self?.refresh() }
+    }
+
+    // 새로 추가된 서비스 중 이미 로그인돼 있는 것은 처음 한 번만 자동으로 켬
+    func autoEnableDetected() {
+        DispatchQueue.global(qos: .utility).async {
+            let d = UserDefaults.standard
+            // Gemini는 계정 제한 위험이 있어 사용자가 직접 켜야 함
+            for p in Provider.allCases where !p.hasLocalLogs && p != .gemini {
+                let flag = "autoenabled_\(p.rawValue)"
+                guard !d.bool(forKey: flag) else { continue }
+                // Antigravity는 앱이 실행 중일 때만 (설치만으로는 켜지 않음)
+                let found = p == .antigravity ? AntigravityAPI.discover() != nil : LoginHelper.isLoggedIn(p)
+                if found {
+                    d.set(true, forKey: flag)
+                    DispatchQueue.main.async { d.set(true, forKey: p.enabledKey) }
+                }
+            }
+        }
     }
 
     // 왼쪽 클릭: 대시보드, 오른쪽 클릭: 간단 메뉴
@@ -776,7 +916,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func refresh() {
         guard pending == 0 else { return }
-        pending = Provider.allCases.count + 1
+        let targets = Provider.allCases.filter(Pref.enabled)
+        enabledSet = Set(targets)
+        pending = targets.count + 1
         store.loading = true
         // 로컬 기록 집계 (토큰·비용·작업 시간)
         DispatchQueue.global(qos: .utility).async {
@@ -801,25 +943,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.finishOne()
             }
         }
-        // 꺼둔 서비스도 받아둬서 설정에서 켜면 바로 보이게 함
-        for p in Provider.allCases {
-            let fetch = p == .claude ? ClaudeAPI.fetch : CodexAPI.fetch
+        // 켜 둔 서비스만 가져옴 (설정에서 켜면 바로 다시 새로고침)
+        for p in targets {
             DispatchQueue.global().async {
-                fetch { q, err in
+                ProviderFetch.fetch(p) { q, err, stats in
+                    let loggedIn = LoginHelper.isLoggedIn(p)
                     DispatchQueue.main.async {
+                        if let stats { self.store.local[p] = stats }
                         if let q {
                             self.store.quotas[p] = q; self.store.updated[p] = Date(); self.lastUpdated = Date()
                             if Pref.enabled(p) { Notify.check(p, q) }
                             History.record(p, q)
                             // 로그인된 계정을 자동으로 저장해 두어 나중에 전환할 수 있게 함
-                            if let email = q.email {
+                            if p.supportsSavedAccounts, let email = q.email {
                                 DispatchQueue.global(qos: .utility).async {
                                     AccountStore.saveCurrent(p, email: email)
                                     DispatchQueue.main.async { self.store.savedAccounts = AccountStore.all }
                                 }
                             }
                         }
-                        let loggedIn = LoginHelper.isLoggedIn(p)
                         self.store.loggedIn[p] = loggedIn
                         if !loggedIn { self.store.quotas[p] = nil }   // 로그아웃하면 이전 값을 지움
                         self.store.errors[p] = err
@@ -860,7 +1002,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for dark in [false, true] {
             let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
             appearance.performAsCurrentDrawingAppearance {
-                for t in DashTab.allCases {
+                for t in DashTab.visible {
                     let state = DashState()
                     state.tab = t
                     let view = DashboardView(store: store, ui: state, onRefresh: {}, onSettings: {}, onQuit: {}, flat: true)
@@ -870,7 +1012,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     r.scale = 2
                     if let img = r.nsImage, let tiff = img.tiffRepresentation,
                        let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
-                        try? png.write(to: URL(fileURLWithPath: dir + "/dash-\(t.rawValue)\(dark ? "-dark" : "").png"))
+                        try? png.write(to: URL(fileURLWithPath: dir + "/dash-\(t.id)\(dark ? "-dark" : "").png"))
                     }
                 }
             }
@@ -942,8 +1084,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if q?.limitReached == true { header += L(" — 한도 도달", " — limit reached") }
             menu.addItem(info(header, bold: true))
             if let q {
-                addBucket(menu, L("현재 세션 (5시간)", "Current session (5h)"), q.session)
-                addBucket(menu, L("주간", "Weekly"), q.weekly)
+                addBucket(menu, q.session?.label ?? L("현재 세션 (5시간)", "Current session (5h)"), q.session)
+                addBucket(menu, q.weekly?.label ?? L("주간", "Weekly"), q.weekly)
+                if q.session == nil, q.weekly == nil, let h = q.headline { menu.addItem(info("   " + h)) }
+                for x in q.extras2 { menu.addItem(info("   \(x.label): \(x.value)")) }
                 for (name, b) in q.extras { addBucket(menu, name, b) }
                 let rows = q.breakdown.filter { $0.1 > 0 }
                 if !rows.isEmpty {

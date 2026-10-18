@@ -50,6 +50,8 @@ enum AccountStore {
             return try? JSONSerialization.data(withJSONObject: blob, options: [.sortedKeys])
         case .codex:
             return FileManager.default.contents(atPath: codexAuthPath)
+        default:
+            return nil   // 다른 서비스는 계정 전환을 지원하지 않음
         }
     }
 
@@ -132,6 +134,8 @@ enum AccountStore {
             } catch {
                 return error.localizedDescription
             }
+        default:
+            return L("이 서비스는 계정 전환을 지원하지 않아요", "This service doesn't support switching")
         }
         NotificationCenter.default.post(name: .usageLoginChanged, object: nil)
         return nil

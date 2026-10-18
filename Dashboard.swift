@@ -3,11 +3,17 @@ import Charts
 
 // 메뉴 막대 아이콘을 클릭하면 뜨는 대시보드 팝오버
 
-enum DashTab: String, CaseIterable {
-    case all, claude, codex
-    var title: String { self == .all ? L("전체", "All") : self == .claude ? "Claude" : "Codex" }
-    var symbol: String { self == .all ? "square.grid.2x2.fill" : self == .claude ? "sparkle" : "chevron.left.forwardslash.chevron.right" }
-    var provider: Provider? { self == .claude ? .claude : self == .codex ? .codex : nil }
+enum DashTab: Hashable {
+    case all
+    case service(Provider)
+
+    var title: String { provider?.name ?? L("전체", "All") }
+    var symbol: String { provider?.symbol ?? "square.grid.2x2.fill" }
+    var provider: Provider? { if case .service(let p) = self { return p } else { return nil } }
+    var id: String { provider?.rawValue ?? "all" }
+
+    // 전체 + 켜 둔 서비스
+    static var visible: [DashTab] { [.all] + Provider.allCases.filter(Pref.enabled).map { .service($0) } }
 }
 
 // 팝오버 화면 상태 (@State 대신 사용: swiftc 단독 빌드에서는 매크로를 못 씀)
@@ -24,7 +30,9 @@ final class DashState: ObservableObject {
 // MARK: - 색과 포맷
 
 enum Theme {
-    static let appIcon = flatIcon(NSApp.applicationIconImage)
+    // 번들의 아이콘 파일을 직접 읽음 (applicationIconImage는 회색으로 그려지는 경우가 있음)
+    static let appIcon: NSImage = flatIcon(Bundle.main.url(forResource: "AppIcon", withExtension: "icns")
+        .flatMap { NSImage(contentsOf: $0) } ?? NSApp.applicationIconImage)
     static let accent = Color(red: 0.91, green: 0.42, blue: 0.40)
     static let bar = LinearGradient(colors: [Color(red: 0.42, green: 0.36, blue: 0.85), Color(red: 0.30, green: 0.75, blue: 0.55)],
                                     startPoint: .leading, endPoint: .trailing)
@@ -308,10 +316,7 @@ struct AccountRow: View {
                     Image(nsImage: logo).resizable().interpolation(.high).frame(width: 44, height: 44)
                 } else {
                 ZStack {
-                    Circle().fill(LinearGradient(colors: provider == .claude
-                                                 ? [Color(red: 0.95, green: 0.55, blue: 0.40), Color(red: 0.85, green: 0.35, blue: 0.55)]
-                                                 : [Color(red: 0.25, green: 0.65, blue: 0.75), Color(red: 0.35, green: 0.40, blue: 0.85)],
-                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Circle().fill(provider.color.gradient)
                     Text(provider.icon).font(.system(size: 18, weight: .bold)).foregroundStyle(.white)
                 }
                 .frame(width: 40, height: 40)
@@ -375,7 +380,7 @@ struct DailyChart: View {
                 Chart {
                     ForEach(Array(data.enumerated()), id: \.offset) { i, d in
                         BarMark(x: .value("date", d.date, unit: .day), y: .value("value", values[i]))
-                            .foregroundStyle(provider == .claude ? Color.orange.gradient : Color.teal.gradient)
+                            .foregroundStyle(provider.color.gradient)
                             .cornerRadius(2)
                     }
                 }
@@ -454,9 +459,10 @@ struct TrendChart: View {
     @ObservedObject var ui: DashState
 
     var body: some View {
-        let kind: LimitKind = ui.trendWeekly ? .weekly : .session
-        let bucket = ui.trendWeekly ? quota.weekly : quota.session
-        let window: Double = ui.trendWeekly ? 7 * 86400 : 5 * 3600
+        let weekly = ui.trendWeekly && quota.weekly != nil
+        let kind: LimitKind = weekly ? .weekly : .session
+        let bucket = weekly ? quota.weekly : quota.session
+        let window: Double = bucket?.window ?? (ui.trendWeekly ? 7 * 86400 : 5 * 3600)
         let pts = History.series(provider, kind, current: bucket)
         let end = bucket?.resetsAt ?? Date()
         let start = end.addingTimeInterval(-window)
@@ -465,8 +471,10 @@ struct TrendChart: View {
                 HStack {
                     CardTitle(symbol: "chart.xyaxis.line", color: .mint, text: L("한도 사용 추이", "Limit Usage Trend"))
                     Spacer()
-                    pill(L("세션", "Session"), on: !ui.trendWeekly) { ui.trendWeekly = false }
-                    pill(L("주간", "Weekly"), on: ui.trendWeekly) { ui.trendWeekly = true }
+                    if quota.weekly != nil {
+                        pill(quota.session?.label ?? L("세션", "Session"), on: !ui.trendWeekly) { ui.trendWeekly = false }
+                        pill(quota.weekly?.label ?? L("주간", "Weekly"), on: ui.trendWeekly) { ui.trendWeekly = true }
+                    }
                 }
                 if pts.count < 2 {
                     Text(L("기록을 모으는 중이에요. 새로고침이 몇 번 쌓이면 그래프가 나와요.",
@@ -623,9 +631,14 @@ struct DashboardView: View {
         }
     }
 
-    var tabs: some View {
+    // 서비스가 많으면 가로로 스크롤
+    @ViewBuilder var tabs: some View {
+        if flat { tabRow } else { ScrollView(.horizontal, showsIndicators: false) { tabRow } }
+    }
+
+    var tabRow: some View {
         HStack(spacing: 6) {
-            ForEach(DashTab.allCases.filter { $0.provider == nil || Pref.enabled($0.provider!) }, id: \.self) { t in
+            ForEach(DashTab.visible, id: \.self) { t in
                 let on = ui.tab == t
                 Button { ui.tab = t } label: {
                     HStack(spacing: 5) {
@@ -644,7 +657,6 @@ struct DashboardView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Spacer()
         }
     }
 
@@ -677,13 +689,27 @@ struct DashboardView: View {
         }
     }
 
-    func limits(_ p: Provider) -> some View {
+    @ViewBuilder func limits(_ p: Provider) -> some View {
         let q = store.quotas[p]
-        return HStack(spacing: 10) {
-            LimitCard(title: L("세션", "Session"), symbol: "bolt.fill", bucket: q?.session, window: 5 * 3600, limitReached: q?.limitReached ?? false,
-                      recentRate: History.recentRate(p, .session, current: q?.session))
-            LimitCard(title: L("주간", "Weekly"), symbol: "calendar", bucket: q?.weekly, window: 7 * 86400, limitReached: q?.limitReached ?? false,
-                      recentRate: History.recentRate(p, .weekly, current: q?.weekly))
+        if let q, q.session == nil, q.weekly == nil {
+            // 한도 %가 없는 서비스: 대표 값만
+            if let h = q.headline {
+                StatCard(title: L("이번 달", "This month"), symbol: "dollarsign.circle.fill", color: .green,
+                         value: h, unit: L("사용 금액", "Spent"), sub: nil, fraction: nil, delta: nil)
+            }
+        } else {
+            HStack(spacing: 10) {
+                if q?.session != nil || q == nil {
+                    LimitCard(title: q?.session?.label ?? L("세션", "Session"), symbol: "bolt.fill", bucket: q?.session,
+                              window: q?.session?.window ?? 5 * 3600, limitReached: q?.limitReached ?? false,
+                              recentRate: History.recentRate(p, .session, current: q?.session))
+                }
+                if q?.weekly != nil || q == nil {
+                    LimitCard(title: q?.weekly?.label ?? L("주간", "Weekly"), symbol: "calendar", bucket: q?.weekly,
+                              window: q?.weekly?.window ?? 7 * 86400, limitReached: q?.limitReached ?? false,
+                              recentRate: History.recentRate(p, .weekly, current: q?.weekly))
+                }
+            }
         }
     }
 
@@ -702,8 +728,8 @@ struct DashboardView: View {
                             }
                             Spacer()
                             Text(L("\(Fmt.tokens(d.tokens)) 토큰", "\(Fmt.tokens(d.tokens)) tokens")).monospacedDigit()
-                            if p == .claude { Text("· \(Fmt.money(d.cost))").foregroundStyle(.secondary).monospacedDigit() }
-                            Text("· \(Fmt.duration(d.seconds))").foregroundStyle(.secondary)
+                            if store.local[p]?.hasCost == true { Text("· \(Fmt.money(d.cost))").foregroundStyle(.secondary).monospacedDigit() }
+                            if p.hasLocalLogs { Text("· \(Fmt.duration(d.seconds))").foregroundStyle(.secondary) }
                         }
                         .font(.system(size: 12))
                     }
@@ -724,9 +750,10 @@ struct DashboardView: View {
         AccountRow(provider: p, store: store, ui: ui)
         limits(p)
         if let q = store.quotas[p], !q.extras.isEmpty {
-            HStack(spacing: 10) {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                 ForEach(q.extras.indices, id: \.self) { i in
-                    LimitCard(title: q.extras[i].0, symbol: "calendar.badge.clock", bucket: q.extras[i].1, window: 7 * 86400, limitReached: false)
+                    LimitCard(title: q.extras[i].0, symbol: "calendar.badge.clock", bucket: q.extras[i].1,
+                              window: q.extras[i].1.window ?? 7 * 86400, limitReached: false)
                 }
             }
         }
@@ -749,18 +776,21 @@ struct DashboardView: View {
                          fraction: today.cacheRatio,
                          delta: compare(today.tokens, yday.tokens, Fmt.tokens))
             }
-            StatCard(title: L("오늘 작업 시간", "Working time today"), symbol: "clock.fill", color: .purple,
-                     value: Fmt.duration(today.seconds), unit: L("작업 시간", "Duration"), sub: nil,
-                     fraction: min(1, today.seconds / (8 * 3600)),
-                     delta: compare(today.seconds, yday.seconds, Fmt.duration))
-            HourlyChart(provider: p, stats: s, ui: ui)
+            if p.hasLocalLogs {
+                StatCard(title: L("오늘 작업 시간", "Working time today"), symbol: "clock.fill", color: .purple,
+                         value: Fmt.duration(today.seconds), unit: L("작업 시간", "Duration"), sub: nil,
+                         fraction: min(1, today.seconds / (8 * 3600)),
+                         delta: compare(today.seconds, yday.seconds, Fmt.duration))
+                HourlyChart(provider: p, stats: s, ui: ui)
+            }
             DailyChart(provider: p, stats: s, ui: ui)
             RankCard(provider: p, stats: s, ui: ui)
         }
         if let q = store.quotas[p], !q.extras2.isEmpty {
             Card {
                 VStack(alignment: .leading, spacing: 8) {
-                    CardTitle(symbol: "creditcard.fill", color: .teal, text: L("추가 사용량 · 크레딧", "Extra Usage · Credits"))
+                    CardTitle(symbol: p.hasLocalLogs ? "creditcard.fill" : "list.bullet.rectangle", color: .teal,
+                              text: p.hasLocalLogs ? L("추가 사용량 · 크레딧", "Extra Usage · Credits") : L("세부 정보", "Details"))
                     ForEach(q.extras2.indices, id: \.self) { i in
                         HStack {
                             Text(q.extras2[i].label).font(.system(size: 12))

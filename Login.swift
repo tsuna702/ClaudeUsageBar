@@ -11,13 +11,17 @@ enum LoginHelper {
 
     // 공식 CLI 위치 후보 (앞에서부터 먼저 있는 것을 씀)
     static func cliPath(_ p: Provider) -> String? {
+        func common(_ n: String) -> [String] {
+            [home + "/.local/bin/\(n)", "/opt/homebrew/bin/\(n)", "/usr/local/bin/\(n)",
+             home + "/.npm-global/bin/\(n)", home + "/.bun/bin/\(n)"]
+        }
         let names: [String]
         switch p {
         case .claude:
             names = [home + "/.local/bin/claude", home + "/.claude/local/claude",
                      "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
         case .codex:
-            var list = [home + "/.local/bin/codex", "/opt/homebrew/bin/codex", "/usr/local/bin/codex"]
+            var list = common("codex")
             // ChatGPT(Codex) 앱에 함께 들어 있는 CLI
             for id in ["com.openai.codex", "com.openai.chat"] {
                 if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
@@ -25,23 +29,74 @@ enum LoginHelper {
                 }
             }
             names = list
+        case .gemini: names = common("gemini")
+        case .grok:
+            // USAGE_GROK_CLI: 개발·테스트용 경로
+            names = [ProcessInfo.processInfo.environment["USAGE_GROK_CLI"], GrokAPI.home + "/bin/grok"].compactMap { $0 } + common("grok")
+        case .antigravity, .cursor, .openai, .cloudflare: names = []
         }
         return names.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    static func loginArgs(_ p: Provider) -> String { p == .claude ? "auth login" : "login" }
+    // 로그인에 필요한 것이 설치돼 있는지 (CLI · 앱). API 키 방식은 항상 true
+    static func isInstalled(_ p: Provider) -> Bool {
+        switch p.loginKind {
+        case .cli: return cliPath(p) != nil
+        case .app: return p.appURL != nil
+        case .apiKey: return true
+        }
+    }
+
+    // 설치 안내 문구에 쓰는 이름
+    static func toolName(_ p: Provider) -> String {
+        switch p {
+        case .claude: return "Claude Code"
+        case .codex: return "Codex"
+        case .gemini: return "Gemini CLI"
+        case .grok: return "grok CLI"
+        default: return p.name
+        }
+    }
+
+    static func loginArgs(_ p: Provider) -> String {
+        switch p {
+        case .claude: return "auth login"
+        case .gemini: return ""          // 처음 실행하면 로그인 방법을 물어봄
+        default: return "login"
+        }
+    }
 
     static func installURL(_ p: Provider) -> URL {
-        URL(string: p == .claude ? "https://code.claude.com/docs/en/setup" : "https://chatgpt.com/codex")!
+        let s: String
+        switch p {
+        case .claude: s = "https://code.claude.com/docs/en/setup"
+        case .codex: s = "https://chatgpt.com/codex"
+        case .gemini: s = "https://github.com/google-gemini/gemini-cli"
+        case .antigravity: s = "https://antigravity.google/download"
+        case .cursor: s = "https://cursor.com/download"
+        case .grok: s = "https://x.ai/cli"
+        case .openai: s = "https://platform.openai.com/settings/organization/admin-keys"
+        case .cloudflare: s = "https://dash.cloudflare.com/profile/api-tokens"
+        }
+        return URL(string: s)!
+    }
+
+    static func fileDate(_ path: String) -> String {
+        let m = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        return m.map { "\($0.timeIntervalSince1970)" } ?? "none"
     }
 
     // 로그인 정보가 있는지 (토큰 값은 읽지 않고 존재만 확인)
     static func isLoggedIn(_ p: Provider) -> Bool {
         switch p {
-        case .claude:
-            return ClaudeAPI.security(["find-generic-password", "-s", ClaudeAPI.service]).0 == 0
-        case .codex:
-            return CodexAPI.credentials() != nil
+        case .claude: return ClaudeAPI.security(["find-generic-password", "-s", ClaudeAPI.service]).0 == 0
+        case .codex: return CodexAPI.credentials() != nil
+        case .gemini: return FileManager.default.fileExists(atPath: GeminiAPI.credsPath)
+        case .antigravity: return p.appURL != nil      // 로그인 여부는 앱이 실행 중일 때 확인
+        case .cursor: return CursorAPI.value("cursorAuth/accessToken") != nil
+        case .grok: return FileManager.default.fileExists(atPath: GrokAPI.authPath)
+        case .openai: return KeyStore.get(p.rawValue) != nil
+        case .cloudflare: return KeyStore.get(p.rawValue) != nil && !(UserDefaults.standard.string(forKey: CloudflareAPI.accountKey) ?? "").isEmpty
         }
     }
 
@@ -51,10 +106,11 @@ enum LoginHelper {
         case .claude:
             let (code, data) = ClaudeAPI.security(["find-generic-password", "-s", ClaudeAPI.service])
             return code == 0 ? String(decoding: data, as: UTF8.self) : "none"
-        case .codex:
-            let path = (ProcessInfo.processInfo.environment["CODEX_HOME"] ?? home + "/.codex") + "/auth.json"
-            let m = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
-            return m.map { "\($0.timeIntervalSince1970)" } ?? "none"
+        case .codex: return fileDate((ProcessInfo.processInfo.environment["CODEX_HOME"] ?? home + "/.codex") + "/auth.json")
+        case .gemini: return fileDate(GeminiAPI.credsPath)
+        case .cursor: return fileDate(CursorAPI.dbPath)
+        case .grok: return fileDate(GrokAPI.authPath)
+        case .antigravity, .openai, .cloudflare: return "\(isLoggedIn(p))"
         }
     }
 
@@ -62,6 +118,18 @@ enum LoginHelper {
 
     // 터미널에서 공식 로그인 명령 실행 → 끝나면 자동 새로고침
     static func login(_ p: Provider) {
+        switch p.loginKind {
+        case .apiKey:
+            // 키는 설정창에서 입력
+            NSWorkspace.shared.open(installURL(p))
+            return
+        case .app:
+            // 앱에서 로그인하면 감지
+            if let app = p.appURL { NSWorkspace.shared.open(app); watch(p) } else { NSWorkspace.shared.open(installURL(p)) }
+            return
+        case .cli:
+            break
+        }
         guard let cli = cliPath(p) else {
             NSWorkspace.shared.open(installURL(p))
             return

@@ -8,7 +8,13 @@ VERSION="${VERSION#v}"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
-swiftc -O *.swift -o "$APP/Contents/MacOS/ClaudeUsageBar" -framework Cocoa
+# Apple Silicon과 인텔용을 각각 빌드해서 하나로 합침 (유니버설)
+TMP=$(mktemp -d)
+for ARCH in arm64 x86_64; do
+  swiftc -O *.swift -target "$ARCH-apple-macos14.0" -o "$TMP/$ARCH" -framework Cocoa
+done
+lipo -create "$TMP/arm64" "$TMP/x86_64" -output "$APP/Contents/MacOS/ClaudeUsageBar"
+rm -rf "$TMP"
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

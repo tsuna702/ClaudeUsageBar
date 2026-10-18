@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-Claude와 Codex 사용량을 macOS 메뉴 막대에서 보여주는 앱이에요.
+Claude, Codex, Gemini, Antigravity, Cursor, Grok, OpenAI API, Cloudflare Workers AI 사용량을 macOS 메뉴 막대에서 보여주는 앱이에요.
 
 ## 기능
 
@@ -28,6 +28,14 @@ Claude와 Codex 사용량을 macOS 메뉴 막대에서 보여주는 앱이에요
 | Claude 한도 | Claude Code 로그인 정보(키체인)로 `api.anthropic.com/api/oauth/usage` 호출 |
 | Codex 한도 | `~/.codex/auth.json`으로 `chatgpt.com/backend-api/wham/usage` 호출 |
 | 토큰·비용·작업 시간 | `~/.claude/projects`, `~/.codex/sessions`의 로컬 기록 |
+| Gemini | Gemini CLI 로그인(`~/.gemini/oauth_creds.json`) → Code Assist 할당량 API (내부용) |
+| Antigravity | Antigravity가 실행 중일 때 앱 안의 로컬 language server (내부용) |
+| Cursor | Cursor 앱 로그인 → `cursor.com/api/usage-summary` (내부용) |
+| Grok | `grok agent stdio` → `x.ai/billing` (`grok login` 필요) |
+| OpenAI API | 공식 Admin API(`/v1/organization/costs`, `/usage/completions`), Admin API 키 필요 |
+| Cloudflare AI | 공식 GraphQL Analytics API(`aiInferenceAdaptiveGroups`), API 토큰과 계정 ID 필요 |
+
+Claude·Codex 외 서비스는 처음에 꺼져 있어요. 설정 → 계정에서 켜세요. Gemini, Antigravity, Cursor는 공개되지 않은 내부 API를 쓰기 때문에 예고 없이 바뀔 수 있어요. **Google은 Gemini CLI 로그인을 다른 프로그램에서 쓰는 것을 정책 위반으로 볼 수 있다고 밝혔어요.** 계정 제한 위험을 감수할 때만 Gemini를 켜세요.
 
 비용은 공식 API 가격으로 계산한 값이라 구독 요금제에서 실제로 내는 돈과는 달라요. Claude 토큰이 만료되면 Claude Code와 같은 방식으로 갱신해서 키체인에 다시 저장해요.
 

@@ -77,13 +77,12 @@ struct BarPreview: View {
     @AppStorage(Pref.useGauge) var useGauge = false
     @AppStorage(Pref.spacing) var spacing = 10.0
     @AppStorage(Pref.colorWarnings) var colorWarnings = true
-    @AppStorage(Provider.claude.enabledKey) var showClaude = true
-    @AppStorage(Provider.codex.enabledKey) var showCodex = true
+    @ObservedObject var watcher = PrefsWatcher.shared   // 서비스 켜고 끄기 등 나머지 설정
 
     var body: some View {
         // 위 값들이 바뀔 때마다 다시 그려지도록 읽어둠
         _ = (showIcon, useLogo, showName, showSession, showSessionLeft, showLeftLabel, showWeekly,
-             showLabels, showReset, useGauge, colorWarnings, showClaude, showCodex)
+             showLabels, showReset, useGauge, colorWarnings, watcher.tick)
         let segs = Format.segments(store.quotas, sampleIfMissing: true)
         return HStack(spacing: spacing) {
             ForEach(segs.indices, id: \.self) { i in
@@ -115,8 +114,6 @@ struct MenubarCatalogView: View {
     @AppStorage(Pref.showReset) var showReset = false
     @AppStorage(Pref.useGauge) var useGauge = false
     @AppStorage(Pref.spacing) var spacing = 10.0
-    @AppStorage(Provider.claude.enabledKey) var showClaude = true
-    @AppStorage(Provider.codex.enabledKey) var showCodex = true
 
     var anyValue: Bool { showSession || showSessionLeft || showWeekly }
 
@@ -151,10 +148,7 @@ struct MenubarCatalogView: View {
                             }
                         }
                         group(L("서비스", "Services"), note: L("하나 이상", "At least one")) {
-                            CatalogChip(title: "Claude", symbol: "sparkle", image: Provider.claude.logo, on: showClaude,
-                                        disabled: showClaude && !showCodex) { showClaude.toggle() }
-                            CatalogChip(title: "Codex", symbol: "chevron.left.forwardslash.chevron.right", image: Provider.codex.logo,
-                                        on: showCodex, disabled: showCodex && !showClaude) { showCodex.toggle() }
+                            ForEach(Provider.allCases, id: \.self) { p in ServiceChip(provider: p) }
                         }
                         group(L("세션 (5시간)", "Session (5h)"), note: nil) {
                             CatalogChip(title: L("사용량", "Used"), symbol: "bolt.fill", on: showSession) { showSession.toggle() }
@@ -234,8 +228,8 @@ struct MenubarCatalogView: View {
     func resetDefaults() {
         let d = UserDefaults.standard
         for k in [Pref.showIcon, Pref.useLogo, Pref.showName, Pref.showSession, Pref.showSessionLeft, Pref.showLeftLabel,
-                  Pref.showWeekly, Pref.showLabels, Pref.showReset, Pref.useGauge, Pref.spacing,
-                  Provider.claude.enabledKey, Provider.codex.enabledKey] {
+                  Pref.showWeekly, Pref.showLabels, Pref.showReset, Pref.useGauge, Pref.spacing]
+                  + Provider.allCases.map(\.enabledKey) {
             d.removeObject(forKey: k)
         }
     }
