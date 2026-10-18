@@ -67,6 +67,7 @@ struct BarPreview: View {
     var size: CGFloat = 13
     @AppStorage(Pref.showIcon) var showIcon = true
     @AppStorage(Pref.useLogo) var useLogo = true
+    @AppStorage(Pref.useRing) var useRing = false
     @AppStorage(Pref.showName) var showName = false
     @AppStorage(Pref.showSession) var showSession = true
     @AppStorage(Pref.showSessionLeft) var showSessionLeft = false
@@ -81,13 +82,15 @@ struct BarPreview: View {
 
     var body: some View {
         // 위 값들이 바뀔 때마다 다시 그려지도록 읽어둠
-        _ = (showIcon, useLogo, showName, showSession, showSessionLeft, showLeftLabel, showWeekly,
+        _ = (showIcon, useLogo, useRing, showName, showSession, showSessionLeft, showLeftLabel, showWeekly,
              showLabels, showReset, useGauge, colorWarnings, watcher.tick)
         let segs = Format.segments(store.quotas, sampleIfMissing: true)
         return HStack(spacing: spacing) {
             ForEach(segs.indices, id: \.self) { i in
                 HStack(spacing: 4) {
-                    if segs[i].2.showsLogo, let img = segs[i].2.logo {
+                    if segs[i].2.showsRing {
+                        Image(nsImage: Ring.image(store.quotas[segs[i].2] ?? .sample, size: size + 2))
+                    } else if segs[i].2.showsLogo, let img = segs[i].2.logo {
                         Image(nsImage: img).resizable().frame(width: size + 3, height: size + 3)
                     }
                     if !segs[i].0.isEmpty {
@@ -105,6 +108,7 @@ struct MenubarCatalogView: View {
     var flat = false   // 스냅샷용: 스크롤 없이 그림
     @AppStorage(Pref.showIcon) var showIcon = true
     @AppStorage(Pref.useLogo) var useLogo = true
+    @AppStorage(Pref.useRing) var useRing = false
     @AppStorage(Pref.showName) var showName = false
     @AppStorage(Pref.showSession) var showSession = true
     @AppStorage(Pref.showSessionLeft) var showSessionLeft = false
@@ -140,11 +144,14 @@ struct MenubarCatalogView: View {
                             CatalogChip(title: L("숨기기", "Don't Show"), symbol: "eye.slash", on: !showIcon) {
                                 showIcon = false
                             }
-                            CatalogChip(title: L("기호 (✳︎ ◎)", "Symbols (✳︎ ◎)"), symbol: "asterisk", on: showIcon && !useLogo) {
-                                showIcon = true; useLogo = false
+                            CatalogChip(title: L("기호 (✳︎ ◎)", "Symbols (✳︎ ◎)"), symbol: "asterisk", on: showIcon && !useLogo && !useRing) {
+                                showIcon = true; useLogo = false; useRing = false
                             }
-                            CatalogChip(title: L("앱 로고", "App Logos"), symbol: nil, image: Provider.claude.logo, on: showIcon && useLogo) {
-                                showIcon = true; useLogo = true
+                            CatalogChip(title: L("앱 로고", "App Logos"), symbol: nil, image: Provider.claude.logo, on: showIcon && useLogo && !useRing) {
+                                showIcon = true; useLogo = true; useRing = false
+                            }
+                            CatalogChip(title: L("링 게이지", "Ring Gauge"), symbol: "circle.dashed", on: showIcon && useRing) {
+                                showIcon = true; useRing = true
                             }
                         }
                         group(L("서비스", "Services"), note: L("하나 이상", "At least one")) {
@@ -227,7 +234,7 @@ struct MenubarCatalogView: View {
 
     func resetDefaults() {
         let d = UserDefaults.standard
-        for k in [Pref.showIcon, Pref.useLogo, Pref.showName, Pref.showSession, Pref.showSessionLeft, Pref.showLeftLabel,
+        for k in [Pref.showIcon, Pref.useLogo, Pref.useRing, Pref.showName, Pref.showSession, Pref.showSessionLeft, Pref.showLeftLabel,
                   Pref.showWeekly, Pref.showLabels, Pref.showReset, Pref.useGauge, Pref.spacing]
                   + Provider.allCases.map(\.enabledKey) {
             d.removeObject(forKey: k)

@@ -50,9 +50,13 @@ enum Net {
         return r
     }
 
+    // 요청이 너무 많을 때 (이 문구가 오면 잠시 쉬었다가 다시 요청)
+    static var rateLimitMessage: String { L("요청이 너무 많아요 (429) — 5분 뒤 다시 시도해요", "Too many requests (429) — retrying in 5 min") }
+
     static func httpError(_ code: Int, _ err: String?) -> String {
         if let err { return err }
         if code == 401 || code == 403 { return L("인증 실패 — 다시 로그인해 주세요", "Auth failed — sign in again") }
+        if code == 429 { return rateLimitMessage }
         return "HTTP \(code)"
     }
 

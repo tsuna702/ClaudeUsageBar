@@ -119,6 +119,11 @@ struct AccountSettingRow: View {
             }
         }
         if provider.loginKind == .apiKey { APIKeyFields(provider: provider, store: store) }
+        HStack {
+            Spacer().frame(width: 34)
+            IntervalPicker(provider: provider)
+            Spacer()
+        }
         if let note = providerNote(provider) {
             Text(note).font(.caption).foregroundStyle(.secondary).padding(.leading, 34)
                 .fixedSize(horizontal: false, vertical: true)

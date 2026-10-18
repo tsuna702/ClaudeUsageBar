@@ -660,7 +660,32 @@ struct DashboardView: View {
         }
     }
 
+    // 켜 둔 서비스 중 장애가 있는 것 (같은 상태 페이지는 한 번만)
+    var outages: [(Provider, ServiceStatus)] {
+        var seen = Set<String>()
+        return providers.compactMap { p in
+            guard let st = store.statuses[p], st.level > 0, seen.insert(st.url.absoluteString).inserted else { return nil }
+            return (p, st)
+        }
+    }
+
     @ViewBuilder var content: some View {
+        ForEach(outages, id: \.0) { p, st in
+            Button { NSWorkspace.shared.open(st.url) } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(st.level == 2 ? Color.red : Color.orange)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(L("\(p.name) 서비스 장애", "\(p.name) service issue")).font(.system(size: 12, weight: .semibold))
+                        Text(st.text).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    Spacer()
+                    Text(L("상태 보기", "Status")).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.accentColor)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 12).fill((st.level == 2 ? Color.red : Color.orange).opacity(0.12)))
+            }
+            .buttonStyle(.plain)
+        }
         if let u = store.update {
             Button { NSWorkspace.shared.open(u.url) } label: {
                 HStack(spacing: 8) {

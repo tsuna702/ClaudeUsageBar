@@ -58,3 +58,25 @@ struct ServiceChip: View {
         CatalogChip(title: provider.name, symbol: provider.symbol, image: provider.logo, on: on, disabled: onlyOne) { on.toggle() }
     }
 }
+
+// 서비스별 새로고침 간격 (0 = 일반 설정 따르기)
+struct IntervalPicker: View {
+    let provider: Provider
+    @AppStorage var minutes: Int
+
+    init(provider: Provider) {
+        self.provider = provider
+        _minutes = AppStorage(wrappedValue: 0, Pref.intervalKey(provider))
+    }
+
+    var body: some View {
+        Picker(L("새로고침", "Refresh"), selection: $minutes) {
+            Text(L("기본값", "Default")).tag(0)
+            ForEach([1, 2, 5, 10, 30, 60], id: \.self) { m in
+                Text(m < 60 ? L("\(m)분", "\(m) min") : L("1시간", "1 hour")).tag(m)
+            }
+        }
+        .controlSize(.small)
+        .frame(width: 170)
+    }
+}

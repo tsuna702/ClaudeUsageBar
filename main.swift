@@ -154,7 +154,8 @@ enum Provider: String, CaseIterable {
         Provider.logoCache[self] = img
         return img
     }
-    var showsLogo: Bool { Pref.on(Pref.showIcon) && Pref.on(Pref.useLogo) && logo != nil }
+    var showsRing: Bool { Pref.on(Pref.showIcon) && Pref.on(Pref.useRing) }
+    var showsLogo: Bool { Pref.on(Pref.showIcon) && !Pref.on(Pref.useRing) && Pref.on(Pref.useLogo) && logo != nil }
 }
 
 // 시스템 아이콘(여러 해상도가 섞인 이미지)을 일반 비트맵으로 바꿈
@@ -320,7 +321,7 @@ enum ClaudeAPI {
                 return
             }
             guard code == 200, let data else {
-                done(nil, code == 401 ? L("토큰 만료 — 터미널에서 claude를 한 번 실행해 주세요", "Token expired — run claude in Terminal once") : "HTTP \(code)")
+                done(nil, code == 401 ? L("토큰 만료 — 터미널에서 claude를 한 번 실행해 주세요", "Token expired — run claude in Terminal once") : Net.httpError(code, nil))
                 return
             }
             guard let u = try? JSONDecoder().decode(ClaudeUsage.self, from: data) else { done(nil, L("응답 해석 실패", "Could not read response")); return }
@@ -400,7 +401,7 @@ enum CodexAPI {
             if let err { done(nil, err.localizedDescription); return }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             guard code == 200, let data else {
-                done(nil, code == 401 ? L("토큰 만료 — Codex를 한 번 실행해 주세요", "Token expired — open Codex once") : "HTTP \(code)")
+                done(nil, code == 401 ? L("토큰 만료 — Codex를 한 번 실행해 주세요", "Token expired — open Codex once") : Net.httpError(code, nil))
                 return
             }
             guard let u = try? JSONDecoder().decode(CodexUsage.self, from: data) else { done(nil, L("응답 해석 실패", "Could not read response")); return }
@@ -428,6 +429,7 @@ enum CodexAPI {
 
 enum Pref {
     static let refreshMinutes = "refreshMinutes"
+    static func intervalKey(_ p: Provider) -> String { "interval_\(p.rawValue)" }
     static let colorWarnings = "colorWarnings"
     static let orangeAt = "orangeAt"
     static let redAt = "redAt"
@@ -435,6 +437,7 @@ enum Pref {
     // 메뉴 막대에 보일 요소 (각각 켜고 끔)
     static let showIcon = "bar_icon"
     static let useLogo = "bar_logo"
+    static let useRing = "bar_ring"
     static let showName = "bar_name"
     static let showSession = "bar_session"
     static let showSessionLeft = "bar_session_left"
@@ -452,7 +455,9 @@ enum Pref {
             Provider.gemini.enabledKey: false, Provider.antigravity.enabledKey: false, Provider.cursor.enabledKey: false,
             Provider.grok.enabledKey: false, Provider.openai.enabledKey: false, Provider.cloudflare.enabledKey: false,
             Notify.enabledKey: true, Notify.resetKey: true,
-            showIcon: true, useLogo: true, showName: false, showSession: true, showSessionLeft: false, showLeftLabel: true, showWeekly: true,
+            Hotkey.key: "optcmdU",
+            Notify.quietKey: false, Notify.quietStartKey: 22, Notify.quietEndKey: 8,
+            showIcon: true, useLogo: true, useRing: false, showName: false, showSession: true, showSessionLeft: false, showLeftLabel: true, showWeekly: true,
             showLabels: false, showReset: false, useGauge: false, spacing: 10.0,
         ])
     }
@@ -492,7 +497,7 @@ enum Format {
         func value(_ b: Bucket?) -> String { gaugeOn ? gauge(b) : pct(b) }
 
         var head: [String] = []
-        if Pref.on(Pref.showIcon), !p.showsLogo { head.append(p.icon) }
+        if Pref.on(Pref.showIcon), !p.showsLogo, !p.showsRing { head.append(p.icon) }
         if Pref.on(Pref.showName) { head.append(p.name) }
 
         var values: [String] = []
@@ -565,6 +570,7 @@ final class UsageStore: ObservableObject {
     @Published var loading = false
     @Published var loggedIn: [Provider: Bool] = [:]
     @Published var update: UpdateInfo?
+    @Published var statuses: [Provider: ServiceStatus] = [:]
     @Published var savedAccounts: [SavedAccount] = AccountStore.all
     @Published var updateStatus = ""
 }
@@ -604,7 +610,11 @@ struct SettingsView: View {
     @AppStorage(Pref.refreshMinutes) var refreshMinutes = 5
     @AppStorage(Notify.enabledKey) var notifyLimits = true
     @AppStorage(Lang.key) var lang = "system"
+    @AppStorage(Hotkey.key) var hotkey = "optcmdU"
     @AppStorage(Notify.resetKey) var notifyReset = true
+    @AppStorage(Notify.quietKey) var quietOn = false
+    @AppStorage(Notify.quietStartKey) var quietStart = 22
+    @AppStorage(Notify.quietEndKey) var quietEnd = 8
     @AppStorage(Pref.colorWarnings) var colorWarnings = true
     @AppStorage(Pref.orangeAt) var orangeAt = 70.0
     @AppStorage(Pref.redAt) var redAt = 90.0
@@ -612,6 +622,7 @@ struct SettingsView: View {
     func color(_ level: Int) -> Color { [Color.primary, .orange, .red][level] }
 
     @ObservedObject var nav = SettingsNav.shared
+    @ObservedObject var diag = DiagState()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -656,13 +667,16 @@ struct SettingsView: View {
         if nav.page == .menubar {
             MenubarCatalogView(store: store)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if nav.page == .diagnostics {
+            DiagnosticsView(state: diag)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             Form {
                 switch nav.page {
                 case .general: generalPage
                 case .accounts: accountsPage
                 case .alerts: alertsPage
-                case .menubar: EmptyView()
+                case .menubar, .diagnostics: EmptyView()
                 }
             }
             .formStyle(.grouped)
@@ -692,6 +706,11 @@ struct SettingsView: View {
                 Text("한국어").tag("ko")
                 Text("English").tag("en")
             }
+            Picker(L("대시보드 단축키", "Dashboard shortcut"), selection: $hotkey) {
+                ForEach(Hotkey.presets, id: \.id) { p in
+                    Text(p.id == "off" ? L("사용 안 함", "Off") : p.label).tag(p.id)
+                }
+            }
             Picker(L("새로고침 간격", "Refresh every"), selection: $refreshMinutes) {
                 Text(L("1분", "1 min")).tag(1)
                 Text(L("2분", "2 min")).tag(2)
@@ -704,6 +723,7 @@ struct SettingsView: View {
                 Text(loginError).font(.caption).foregroundStyle(.red)
             }
         }
+        StatusLineSection()
         Section(L("업데이트", "Updates")) {
             LabeledContent(L("현재 버전", "Current version"), value: Updater.current)
             HStack {
@@ -757,12 +777,26 @@ struct SettingsView: View {
             Text(L("기준은 위 '경고 색상'의 주황색·빨간색 값을 따르고, 한도를 다 쓰면 한 번 더 알려요.", "Uses the orange and red levels from Warning colors, and notifies once more when a limit runs out."))
                 .font(.caption).foregroundStyle(.secondary)
         }
+        Section(L("방해 금지 시간", "Quiet Hours")) {
+            Toggle(L("이 시간에는 알리지 않기", "Don't notify during these hours"), isOn: $quietOn)
+            if quietOn {
+                Picker(L("시작", "From"), selection: $quietStart) {
+                    ForEach(0..<24, id: \.self) { h in Text(String(format: "%02d:00", h)).tag(h) }
+                }
+                Picker(L("끝", "To"), selection: $quietEnd) {
+                    ForEach(0..<24, id: \.self) { h in Text(String(format: "%02d:00", h)).tag(h) }
+                }
+                Text(L("이 시간에 생긴 알림은 보내지 않고 넘어가요. 메뉴 막대 색은 그대로 바뀌어요.",
+                       "Notifications during these hours are skipped. Menu bar colors still change."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 
 // 설정창 왼쪽 목록 항목
 enum SettingsPage: CaseIterable {
-    case general, accounts, menubar, alerts
+    case general, accounts, menubar, alerts, diagnostics
 
     var title: String {
         switch self {
@@ -770,6 +804,7 @@ enum SettingsPage: CaseIterable {
         case .accounts: return L("계정", "Accounts")
         case .menubar: return L("메뉴 막대", "Menu Bar")
         case .alerts: return L("경고와 알림", "Alerts")
+        case .diagnostics: return L("진단", "Diagnostics")
         }
     }
 
@@ -779,6 +814,7 @@ enum SettingsPage: CaseIterable {
         case .accounts: return "person.crop.circle.fill"
         case .menubar: return "menubar.rectangle"
         case .alerts: return "bell.badge.fill"
+        case .diagnostics: return "stethoscope"
         }
     }
 
@@ -788,6 +824,7 @@ enum SettingsPage: CaseIterable {
         case .accounts: return .blue
         case .menubar: return .purple
         case .alerts: return .red
+        case .diagnostics: return .green
         }
     }
 }
@@ -804,19 +841,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let store = UsageStore()
     var timer: Timer?
-    var timerMinutes = 0
     var lastUpdated: Date?
     var settingsWindow: NSWindow?
     let popover = NSPopover()
     let ui = DashState()
     var rightMenu = NSMenu()
-    var pending = 0
+    var inFlight = Set<Provider>()
+    var scanning = false
+    var lastFetch: [Provider: Date] = [:]
     var enabledSet = Set<Provider>()
     var lastRefreshStart = Date.distantPast
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Pref.registerDefaults()
+        // 개발용: 모든 서비스를 진단해서 보고서를 출력하고 종료
+        if ProcessInfo.processInfo.environment["USAGE_DIAG"] != nil {
+            DispatchQueue.global().async {
+                var r: [Provider: [DiagStep]] = [:]
+                for p in Provider.allCases { r[p] = Diagnostics.run(p) }
+                print(Diagnostics.report(r)); fflush(stdout)
+                DispatchQueue.main.async { NSApp.terminate(nil) }
+            }
+            return
+        }
         Notify.requestPermission()
+        Hotkey.action = { [weak self] in
+            guard let self, let b = self.statusItem.button else { return }
+            self.statusClicked(b)
+        }
+        Hotkey.apply()
         autoEnableDetected()
         statusItem.button?.title = "✳︎ …"
         statusItem.button?.target = self
@@ -862,19 +915,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.rebuildMenu()
             self?.scheduleTimer()
             self?.settingsWindow?.title = L("사용량 설정", "UsageBar Settings")
+            Hotkey.apply()
             // 새로 켠 서비스가 있으면 바로 불러옴
-            if let self, Set(Provider.allCases.filter(Pref.enabled)).subtracting(self.enabledSet).isEmpty == false {
-                self.refresh()
+            if let self {
+                let newly = Set(Provider.allCases.filter(Pref.enabled)).subtracting(self.enabledSet)
+                if !newly.isEmpty { self.refresh(only: Array(newly)) }
             }
         }
     }
 
+    // 1분마다 확인해서 서비스마다 정한 간격이 지났으면 새로고침
     func scheduleTimer() {
-        let minutes = max(1, UserDefaults.standard.integer(forKey: Pref.refreshMinutes))
-        guard minutes != timerMinutes else { return }
-        timerMinutes = minutes
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(minutes * 60), repeats: true) { [weak self] _ in self?.refresh() }
+        guard timer == nil else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.tick() }
     }
 
     // 새로 추가된 서비스 중 이미 로그인돼 있는 것은 처음 한 번만 자동으로 켬
@@ -898,7 +951,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 왼쪽 클릭: 대시보드, 오른쪽 클릭: 간단 메뉴
     @objc func statusClicked(_ sender: NSStatusBarButton) {
         // 아이콘을 누를 때마다 새로고침 (10초 안에 다시 누르면 건너뜀)
-        if Date().timeIntervalSince(lastRefreshStart) > 10, !popover.isShown { refresh() }
+        // 마지막으로 불러온 지 1분이 지난 서비스만 (요청이 몰리지 않게)
+        if Date().timeIntervalSince(lastRefreshStart) > 10, !popover.isShown {
+            let now = Date()
+            refresh(only: Provider.allCases.filter { now.timeIntervalSince(lastFetch[$0] ?? .distantPast) > 60 })
+        }
         if NSApp.currentEvent?.type == .rightMouseUp {
             statusItem.menu = rightMenu
             sender.performClick(nil)
@@ -919,15 +976,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc func refresh() {
-        guard pending == 0 else { return }
+    // 서비스별 새로고침 간격(분). 0이면 전체 설정을 따름
+    func interval(_ p: Provider) -> Double {
+        let own = UserDefaults.standard.integer(forKey: Pref.intervalKey(p))
+        return Double(own > 0 ? own : max(1, UserDefaults.standard.integer(forKey: Pref.refreshMinutes))) * 60
+    }
+
+    // 1분마다: 간격이 지난 서비스만 새로고침
+    func tick() {
+        let now = Date()
+        let due = Provider.allCases.filter { Pref.enabled($0) && now.timeIntervalSince(lastFetch[$0] ?? .distantPast) >= interval($0) - 5 }
+        if !due.isEmpty { refresh(only: due) }
+    }
+
+    func updateLoading() {
+        let busy = !inFlight.isEmpty || scanning
+        if store.loading && !busy, let dir = ProcessInfo.processInfo.environment["USAGE_SNAPSHOT"] {
+            store.loading = false
+            MainActor.assumeIsolated { snapshot(to: dir) }
+        }
+        store.loading = busy
+    }
+
+    @objc func refresh() { refresh(only: nil) }
+
+    // 상태 페이지는 서비스마다 5분에 한 번만 확인
+    var lastStatus: [Provider: Date] = [:]
+    func checkStatuses(_ ps: [Provider]) {
+        let now = Date()
+        for p in ps where now.timeIntervalSince(lastStatus[p] ?? .distantPast) > 300 {
+            lastStatus[p] = now
+            DispatchQueue.global(qos: .utility).async {
+                let st = StatusCheck.check(p)
+                DispatchQueue.main.async { self.store.statuses[p] = st }
+            }
+        }
+    }
+
+    func refresh(only: [Provider]?) {
         lastRefreshStart = Date()
-        let targets = Provider.allCases.filter(Pref.enabled)
-        enabledSet = Set(targets)
-        pending = targets.count + 1
-        store.loading = true
-        // 로컬 기록 집계 (토큰·비용·작업 시간)
-        DispatchQueue.global(qos: .utility).async {
+        enabledSet = Set(Provider.allCases.filter(Pref.enabled))
+        let targets = (only ?? Provider.allCases).filter { Pref.enabled($0) && !inFlight.contains($0) }
+        guard !targets.isEmpty else { return }
+        for p in targets { inFlight.insert(p); lastFetch[p] = Date() }
+        checkStatuses(targets)
+        // 로컬 기록 집계 (토큰·비용·작업 시간): Claude·Codex를 새로고침할 때만
+        if !scanning, targets.contains(where: \.hasLocalLogs) {
+            scanning = true
+            DispatchQueue.global(qos: .utility).async {
             let t0 = Date()
             let c = LocalScan.claude(), x = LocalScan.codex()
             if ProcessInfo.processInfo.environment["USAGE_DEBUG"] != nil {
@@ -946,10 +1042,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     fflush(stdout)
                 }
-                self.finishOne()
+                self.scanning = false
+                self.updateLoading()
+            }
             }
         }
-        // 켜 둔 서비스만 가져옴 (설정에서 켜면 바로 다시 새로고침)
+        updateLoading()
         for p in targets {
             DispatchQueue.global().async {
                 ProviderFetch.fetch(p) { q, err, stats in
@@ -971,12 +1069,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.store.loggedIn[p] = loggedIn
                         if !loggedIn { self.store.quotas[p] = nil }   // 로그아웃하면 이전 값을 지움
                         self.store.errors[p] = err
+                        // 429면 5분 동안 이 서비스는 다시 요청하지 않음
+                        if err == Net.rateLimitMessage { self.lastFetch[p] = Date().addingTimeInterval(300 - self.interval(p)) }
                         if ProcessInfo.processInfo.environment["USAGE_DEBUG"] != nil {
                             print(p.name, q.map { "session \(Format.pct($0.session)) weekly \(Format.pct($0.weekly)) bar=[\(Format.title($0, p))]" } ?? "-", err ?? ""); fflush(stdout)
                         }
                         self.updateTitle()
                         self.rebuildMenu()
-                        self.finishOne()
+                        self.inFlight.remove(p)
+                        self.updateLoading()
                     }
                 }
             }
@@ -995,13 +1096,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func finishOne() {
-        pending = max(0, pending - 1)
-        if pending == 0 {
-            store.loading = false
-            if let dir = ProcessInfo.processInfo.environment["USAGE_SNAPSHOT"] { MainActor.assumeIsolated { snapshot(to: dir) } }
-        }
-    }
 
     // 개발용: 대시보드 탭별 화면을 PNG로 저장
     @MainActor func snapshot(to dir: String) {
@@ -1036,6 +1130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: 화면
 
     func updateTitle() {
+        StatusLine.write(store.quotas)
         let segs = Format.segments(store.quotas, sampleIfMissing: false)
         guard !segs.isEmpty else {
             statusItem.button?.title = store.errors.isEmpty ? "✳︎ …" : "✳︎ ⚠︎"
@@ -1049,7 +1144,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let gap = UserDefaults.standard.double(forKey: Pref.spacing)
                 title.append(NSAttributedString(string: " ", attributes: [.font: font, .kern: max(0, gap - 4)]))
             }
-            if seg.2.showsLogo, let img = seg.2.logo {
+            if seg.2.showsRing, let q = store.quotas[seg.2] {
+                let a = NSTextAttachment()
+                a.image = Ring.image(q, size: 15)
+                a.bounds = NSRect(x: 0, y: -3, width: 15, height: 15)
+                title.append(NSAttributedString(attachment: a))
+                if !seg.0.isEmpty { title.append(NSAttributedString(string: " ", attributes: [.font: font])) }
+            } else if seg.2.showsLogo, let img = seg.2.logo {
                 let a = NSTextAttachment()
                 a.image = img
                 a.bounds = NSRect(x: 0, y: -3, width: 16, height: 16)
@@ -1112,7 +1213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             df.dateFormat = "HH:mm:ss"
             menu.addItem(info(L("마지막 업데이트 \(df.string(from: t))", "Last updated \(df.string(from: t))")))
         }
-        let refreshItem = NSMenuItem(title: L("지금 새로고침", "Refresh now"), action: #selector(refresh), keyEquivalent: "r")
+        let refreshItem = NSMenuItem(title: L("지금 새로고침", "Refresh now"), action: #selector(refresh as () -> Void), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
         let settings = NSMenuItem(title: L("설정…", "Settings…"), action: #selector(openSettings), keyEquivalent: ",")

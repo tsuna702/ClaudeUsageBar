@@ -19,6 +19,10 @@ A macOS menu bar app that shows your AI usage limits: Claude, Codex, Gemini, Ant
 - **Saved accounts**: signed-in accounts are kept in the Keychain so you can switch between them. Switching also changes the account Claude Code or Codex uses.
 - **CSV export** of daily, per-model and per-project totals and limit history.
 - **Update check** against GitHub Releases.
+- **Service status**: a banner when a service's official status page reports an incident.
+- **Claude Code status line**: one click adds your usage to Claude Code's status line.
+- **Diagnostics**: step-by-step connection checks per service, with a copyable report (no tokens or keys).
+- Global shortcut (⌥⌘U by default), ring gauge icon style, quiet hours, and per-service refresh intervals.
 - Korean and English UI (follows the system language by default), light and dark mode, launch at login.
 
 ## Where the data comes from

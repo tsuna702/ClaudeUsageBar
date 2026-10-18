@@ -6,12 +6,26 @@ import UserNotifications
 enum Notify {
     static let enabledKey = "notify_limits"
     static let resetKey = "notify_reset"
+    static let quietKey = "quiet_on"
+    static let quietStartKey = "quiet_start"
+    static let quietEndKey = "quiet_end"
+
+    // 방해 금지 시간인지 (예: 22시~8시처럼 자정을 넘는 구간도 처리)
+    static var isQuiet: Bool {
+        let d = UserDefaults.standard
+        guard d.bool(forKey: quietKey) else { return false }
+        let start = d.integer(forKey: quietStartKey), end = d.integer(forKey: quietEndKey)
+        let h = Calendar.current.component(.hour, from: Date())
+        if start == end { return false }
+        return start < end ? (h >= start && h < end) : (h >= start || h < end)
+    }
 
     static func requestPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     static func send(_ title: String, _ body: String) {
+        if isQuiet { return }
         let c = UNMutableNotificationContent()
         c.title = title
         c.body = body
