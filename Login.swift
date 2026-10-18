@@ -66,14 +66,18 @@ enum LoginHelper {
             NSWorkspace.shared.open(installURL(p))
             return
         }
+        let start = L("\(p.name) 로그인을 시작해요. 브라우저에서 로그인을 마치면 이 창은 닫아도 돼요.",
+                      "Starting \(p.name) login. Finish signing in in your browser; you can close this window afterwards.")
+        let done = L("완료! UsageBar가 자동으로 사용량을 불러와요. 이 창은 닫아도 돼요.",
+                     "Done! UsageBar will load your usage automatically. You can close this window.")
         let script = """
         #!/bin/zsh
         clear
-        echo "\(p.name) 로그인을 시작해요. 브라우저에서 로그인을 마치면 이 창은 닫아도 돼요."
+        echo "\(start)"
         echo
         "\(cli)" \(loginArgs(p))
         echo
-        echo "완료! UsageBar가 자동으로 사용량을 불러와요. 이 창은 닫아도 돼요."
+        echo "\(done)"
         """
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("usagebar-login-\(p.rawValue).command")
         do {

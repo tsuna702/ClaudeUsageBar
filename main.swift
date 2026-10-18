@@ -185,8 +185,8 @@ enum ClaudeAPI {
     }
 
     static func fetch(retry: Bool, _ done: @escaping (Quota?, String?) -> Void) {
-        guard readCredentials() != nil else { done(nil, "Claude Code 로그인 정보를 찾을 수 없어요"); return }
-        guard let token = refreshIfNeeded() else { done(nil, "토큰 갱신 실패 — 터미널에서 claude를 한 번 실행해 주세요"); return }
+        guard readCredentials() != nil else { done(nil, L("Claude Code 로그인 정보를 찾을 수 없어요", "Claude Code login not found")); return }
+        guard let token = refreshIfNeeded() else { done(nil, L("토큰 갱신 실패 — 터미널에서 claude를 한 번 실행해 주세요", "Token refresh failed — run claude in Terminal once")); return }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
@@ -203,13 +203,13 @@ enum ClaudeAPI {
                 return
             }
             guard code == 200, let data else {
-                done(nil, code == 401 ? "토큰 만료 — 터미널에서 claude를 한 번 실행해 주세요" : "HTTP \(code)")
+                done(nil, code == 401 ? L("토큰 만료 — 터미널에서 claude를 한 번 실행해 주세요", "Token expired — run claude in Terminal once") : "HTTP \(code)")
                 return
             }
-            guard let u = try? JSONDecoder().decode(ClaudeUsage.self, from: data) else { done(nil, "응답 해석 실패"); return }
+            guard let u = try? JSONDecoder().decode(ClaudeUsage.self, from: data) else { done(nil, L("응답 해석 실패", "Could not read response")); return }
             var q = Quota(session: bucket(u.five_hour), weekly: bucket(u.seven_day))
-            if let b = bucket(u.seven_day_opus) { q.extras.append(("주간 Opus", b)) }
-            if let b = bucket(u.seven_day_sonnet) { q.extras.append(("주간 Sonnet", b)) }
+            if let b = bucket(u.seven_day_opus) { q.extras.append((L("주간 Opus", "Weekly Opus"), b)) }
+            if let b = bucket(u.seven_day_sonnet) { q.extras.append((L("주간 Sonnet", "Weekly Sonnet"), b)) }
             q.breakdown = (u.seven_day_breakdown?.rows ?? []).map { ($0.display_name, $0.percent) }
             let oauth = readCredentials()?["claudeAiOauth"] as? [String: Any]
             q.plan = oauth?["subscriptionType"] as? String
@@ -254,7 +254,7 @@ enum CodexAPI {
     }
 
     static func fetch(_ done: @escaping (Quota?, String?) -> Void) {
-        guard let c = credentials() else { done(nil, "Codex 로그인 정보를 찾을 수 없어요"); return }
+        guard let c = credentials() else { done(nil, L("Codex 로그인 정보를 찾을 수 없어요", "Codex login not found")); return }
         var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
         req.setValue("Bearer \(c.token)", forHTTPHeaderField: "Authorization")
         if let a = c.account { req.setValue(a, forHTTPHeaderField: "ChatGPT-Account-Id") }
@@ -264,10 +264,10 @@ enum CodexAPI {
             if let err { done(nil, err.localizedDescription); return }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             guard code == 200, let data else {
-                done(nil, code == 401 ? "토큰 만료 — Codex를 한 번 실행해 주세요" : "HTTP \(code)")
+                done(nil, code == 401 ? L("토큰 만료 — Codex를 한 번 실행해 주세요", "Token expired — open Codex once") : "HTTP \(code)")
                 return
             }
-            guard let u = try? JSONDecoder().decode(CodexUsage.self, from: data) else { done(nil, "응답 해석 실패"); return }
+            guard let u = try? JSONDecoder().decode(CodexUsage.self, from: data) else { done(nil, L("응답 해석 실패", "Could not read response")); return }
             var q = Quota()
             // 창 길이로 세션(짧은 창)과 주간(긴 창)을 구분
             for w in [u.rate_limit?.primary_window, u.rate_limit?.secondary_window].compactMap({ $0 }) {
@@ -355,7 +355,7 @@ enum Format {
             var pieces: [String] = []
             if used { pieces.append(value(q.session)) }
             let leftLabel = Pref.on(Pref.showLeftLabel)
-            if left { pieces.append((leftLabel ? "남음 " : "") + value(remaining(q.session))) }
+            if left { pieces.append(leftLabel ? L("남음 \(value(remaining(q.session)))", "\(value(remaining(q.session))) left") : value(remaining(q.session))) }
             // '남음' 글자가 없으면 사용/남은 값을 '/'로 구분
             var s = (labels ? "5h " : "") + pieces.joined(separator: leftLabel ? " " : "/")
             if Pref.on(Pref.showReset) { s += " (\(shortReset(q.session)))" }
@@ -371,14 +371,14 @@ enum Format {
         guard let date = b.resetsAt else { return "" }
         let secs = Int(date.timeIntervalSinceNow)
         let rel: String
-        if secs <= 0 { rel = "곧" }
-        else if secs < 3600 { rel = "\(secs / 60)분 후" }
-        else if secs < 86400 { rel = "\(secs / 3600)시간 \((secs % 3600) / 60)분 후" }
-        else { rel = "\(secs / 86400)일 \((secs % 86400) / 3600)시간 후" }
+        if secs <= 0 { rel = L("곧", "soon") }
+        else if secs < 3600 { rel = L("\(secs / 60)분 후", "in \(secs / 60)m") }
+        else if secs < 86400 { rel = L("\(secs / 3600)시간 \((secs % 3600) / 60)분 후", "in \(secs / 3600)h \((secs % 3600) / 60)m") }
+        else { rel = L("\(secs / 86400)일 \((secs % 86400) / 3600)시간 후", "in \(secs / 86400)d \((secs % 86400) / 3600)h") }
         let df = DateFormatter()
-        df.locale = Locale(identifier: "ko_KR")
+        df.locale = Lang.locale
         df.dateFormat = "M/d (E) HH:mm"
-        return "초기화: \(df.string(from: date)) · \(rel)"
+        return L("초기화: \(df.string(from: date)) · \(rel)", "Resets \(df.string(from: date)) · \(rel)")
     }
 
     // 경고 색 단계: 0 보통, 1 주황, 2 빨강
@@ -422,7 +422,7 @@ final class LoginItem: ObservableObject {
             else { try SMAppService.mainApp.unregister() }
             error = nil
         } catch {
-            self.error = "설정 실패: \(error.localizedDescription)"
+            self.error = L("설정 실패: ", "Failed: ") + error.localizedDescription
         }
         enabled = SMAppService.mainApp.status == .enabled
     }
@@ -445,6 +445,7 @@ struct SettingsView: View {
     @AppStorage(Pref.useGauge) var useGauge = false
     @AppStorage(Pref.refreshMinutes) var refreshMinutes = 5
     @AppStorage(Notify.enabledKey) var notifyLimits = true
+    @AppStorage(Lang.key) var lang = "system"
     @AppStorage(Notify.resetKey) var notifyReset = true
     @AppStorage(Pref.colorWarnings) var colorWarnings = true
     @AppStorage(Pref.orangeAt) var orangeAt = 70.0
@@ -473,7 +474,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("미리보기") {
+            Section(L("미리보기", "Preview")) {
                 HStack {
                     Spacer()
                     preview()
@@ -485,61 +486,66 @@ struct SettingsView: View {
                 .padding(.vertical, 6)
             }
 
-            Section("계정 연결") {
+            Section(L("계정 연결", "Accounts")) {
                 ForEach(Provider.allCases, id: \.self) { p in
                     AccountSettingRow(provider: p, store: store)
                 }
-                Text("각 서비스의 공식 로그인 창이 터미널에서 열려요. 로그인이 끝나면 자동으로 사용량을 불러와요.")
+                Text(L("각 서비스의 공식 로그인 창이 터미널에서 열려요. 로그인이 끝나면 자동으로 사용량을 불러와요.", "Each service's official login opens in Terminal. Your usage loads automatically when you finish."))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("표시할 서비스") {
+            Section(L("표시할 서비스", "Services")) {
                 Toggle("✳︎ Claude", isOn: $showClaude).disabled(showClaude && !showCodex)
                 Toggle("◎ Codex", isOn: $showCodex).disabled(showCodex && !showClaude)
             }
 
-            Section("메뉴 막대 표시 형식") {
-                Toggle("아이콘", isOn: $showIcon)
-                Toggle("아이콘을 앱 로고로 표시", isOn: $useLogo).disabled(!showIcon)
-                Toggle("서비스 이름 (Claude, Codex)", isOn: $showName)
-                Toggle("세션 사용량 (5시간)", isOn: $showSession)
-                Toggle("세션 남은 사용량", isOn: $showSessionLeft)
-                Toggle("“남음” 글자 표시", isOn: $showLeftLabel).disabled(!showSessionLeft)
-                Toggle("주간 사용량", isOn: $showWeekly)
-                Toggle("5h · 7d 라벨", isOn: $showLabels).disabled(!showSession && !showSessionLeft && !showWeekly)
-                Toggle("세션 초기화까지 남은 시간", isOn: $showReset).disabled(!showSession && !showSessionLeft)
-                Toggle("숫자 대신 막대 게이지 (▰▱)", isOn: $useGauge).disabled(!showSession && !showSessionLeft && !showWeekly)
+            Section(L("메뉴 막대 표시 형식", "Menu bar display")) {
+                Toggle(L("아이콘", "Icon"), isOn: $showIcon)
+                Toggle(L("아이콘을 앱 로고로 표시", "Use app logos as icons"), isOn: $useLogo).disabled(!showIcon)
+                Toggle(L("서비스 이름 (Claude, Codex)", "Service name (Claude, Codex)"), isOn: $showName)
+                Toggle(L("세션 사용량 (5시간)", "Session usage (5h)"), isOn: $showSession)
+                Toggle(L("세션 남은 사용량", "Session remaining"), isOn: $showSessionLeft)
+                Toggle(L("“남음” 글자 표시", "Show “left” label"), isOn: $showLeftLabel).disabled(!showSessionLeft)
+                Toggle(L("주간 사용량", "Weekly usage"), isOn: $showWeekly)
+                Toggle(L("5h · 7d 라벨", "5h · 7d labels"), isOn: $showLabels).disabled(!showSession && !showSessionLeft && !showWeekly)
+                Toggle(L("세션 초기화까지 남은 시간", "Time until session reset"), isOn: $showReset).disabled(!showSession && !showSessionLeft)
+                Toggle(L("숫자 대신 막대 게이지 (▰▱)", "Gauge instead of numbers (▰▱)"), isOn: $useGauge).disabled(!showSession && !showSessionLeft && !showWeekly)
             }
             .toggleStyle(.switch)
 
-            Section("경고 색상") {
-                Toggle("사용량이 높으면 색으로 알려주기", isOn: $colorWarnings)
+            Section(L("경고 색상", "Warning colors")) {
+                Toggle(L("사용량이 높으면 색으로 알려주기", "Color the menu bar when usage is high"), isOn: $colorWarnings)
                 if colorWarnings {
-                    LabeledContent("주황색 기준") {
+                    LabeledContent(L("주황색 기준", "Orange at")) {
                         Stepper("\(Int(orangeAt))%", value: $orangeAt, in: 10...100, step: 5)
                     }
-                    LabeledContent("빨간색 기준") {
+                    LabeledContent(L("빨간색 기준", "Red at")) {
                         Stepper("\(Int(redAt))%", value: $redAt, in: 10...100, step: 5)
                     }
                 }
             }
 
-            Section("알림") {
-                Toggle("사용량이 경고 기준을 넘으면 알리기", isOn: $notifyLimits)
-                Toggle("한도에 가까웠던 창이 초기화되면 알리기", isOn: $notifyReset)
-                Text("기준은 위 '경고 색상'의 주황색·빨간색 값을 따르고, 한도를 다 쓰면 한 번 더 알려요.")
+            Section(L("알림", "Notifications")) {
+                Toggle(L("사용량이 경고 기준을 넘으면 알리기", "Notify when usage crosses a warning level"), isOn: $notifyLimits)
+                Toggle(L("한도에 가까웠던 창이 초기화되면 알리기", "Notify when a nearly used-up limit resets"), isOn: $notifyReset)
+                Text(L("기준은 위 '경고 색상'의 주황색·빨간색 값을 따르고, 한도를 다 쓰면 한 번 더 알려요.", "Uses the orange and red levels from Warning colors, and notifies once more when a limit runs out."))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("일반") {
-                Picker("새로고침 간격", selection: $refreshMinutes) {
-                    Text("1분").tag(1)
-                    Text("2분").tag(2)
-                    Text("5분").tag(5)
-                    Text("10분").tag(10)
-                    Text("30분").tag(30)
+            Section(L("일반", "General")) {
+                Picker(L("언어", "Language"), selection: $lang) {
+                    Text(L("시스템 설정 따르기", "Follow system")).tag("system")
+                    Text("한국어").tag("ko")
+                    Text("English").tag("en")
                 }
-                Toggle("로그인 시 자동 실행", isOn: Binding(get: { login.enabled }, set: { login.set($0) }))
+                Picker(L("새로고침 간격", "Refresh every"), selection: $refreshMinutes) {
+                    Text(L("1분", "1 min")).tag(1)
+                    Text(L("2분", "2 min")).tag(2)
+                    Text(L("5분", "5 min")).tag(5)
+                    Text(L("10분", "10 min")).tag(10)
+                    Text(L("30분", "30 min")).tag(30)
+                }
+                Toggle(L("로그인 시 자동 실행", "Launch at login"), isOn: Binding(get: { login.enabled }, set: { login.set($0) }))
                 if let loginError = login.error {
                     Text(loginError).font(.caption).foregroundStyle(.red)
                 }
@@ -547,6 +553,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
+        .id(lang)
         .frame(width: 460, height: 640)
     }
 }
@@ -606,6 +613,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.updateTitle()
             self?.rebuildMenu()
             self?.scheduleTimer()
+            self?.settingsWindow?.title = L("사용량 설정", "UsageBar Settings")
         }
     }
 
@@ -761,7 +769,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func addBucket(_ menu: NSMenu, _ name: String, _ b: Bucket?) {
         guard let b else { return }
-        menu.addItem(info("   \(name): \(Format.pct(b)) 사용 · \(Format.pct(Format.remaining(b))) 남음"))
+        menu.addItem(info(L("   \(name): \(Format.pct(b)) 사용 · \(Format.pct(Format.remaining(b))) 남음", "   \(name): \(Format.pct(b)) used · \(Format.pct(Format.remaining(b))) left")))
         let r = Format.resetText(b)
         if !r.isEmpty { menu.addItem(info("      \(r)")) }
     }
@@ -773,19 +781,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let q = store.quotas[p]
             var header = "\(p.icon) \(p.name)"
             if let plan = q?.plan { header += " (\(plan.capitalized))" }
-            if q?.limitReached == true { header += " — 한도 도달" }
+            if q?.limitReached == true { header += L(" — 한도 도달", " — limit reached") }
             menu.addItem(info(header, bold: true))
             if let q {
-                addBucket(menu, "현재 세션 (5시간)", q.session)
-                addBucket(menu, "주간", q.weekly)
+                addBucket(menu, L("현재 세션 (5시간)", "Current session (5h)"), q.session)
+                addBucket(menu, L("주간", "Weekly"), q.weekly)
                 for (name, b) in q.extras { addBucket(menu, name, b) }
                 let rows = q.breakdown.filter { $0.1 > 0 }
                 if !rows.isEmpty {
-                    menu.addItem(info("   주간 사용 비중: " + rows.map { "\($0.0) \(Int($0.1))%" }.joined(separator: ", ")))
+                    menu.addItem(info(L("   주간 사용 비중: ", "   Weekly share: ") + rows.map { "\($0.0) \(Int($0.1))%" }.joined(separator: ", ")))
                 }
             }
             if let e = store.errors[p] { menu.addItem(info("   ⚠︎ \(e)")) }
-            let web = NSMenuItem(title: "   \(p.name) 사용량 페이지 열기", action: #selector(openWeb(_:)), keyEquivalent: "")
+            let web = NSMenuItem(title: L("   \(p.name) 사용량 페이지 열기", "   Open \(p.name) usage page"), action: #selector(openWeb(_:)), keyEquivalent: "")
             web.target = self
             web.representedObject = p.rawValue
             menu.addItem(web)
@@ -794,16 +802,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let t = lastUpdated {
             let df = DateFormatter()
             df.dateFormat = "HH:mm:ss"
-            menu.addItem(info("마지막 업데이트 \(df.string(from: t))"))
+            menu.addItem(info(L("마지막 업데이트 \(df.string(from: t))", "Last updated \(df.string(from: t))")))
         }
-        let refreshItem = NSMenuItem(title: "지금 새로고침", action: #selector(refresh), keyEquivalent: "r")
+        let refreshItem = NSMenuItem(title: L("지금 새로고침", "Refresh now"), action: #selector(refresh), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
-        let settings = NSMenuItem(title: "설정…", action: #selector(openSettings), keyEquivalent: ",")
+        let settings = NSMenuItem(title: L("설정…", "Settings…"), action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: L("종료", "Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         rightMenu = menu
     }
 
@@ -821,7 +829,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openSettings() {
         if settingsWindow == nil {
             let w = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(store: store)))
-            w.title = "사용량 설정"
+            w.title = L("사용량 설정", "UsageBar Settings")
             w.styleMask = [.titled, .closable]
             w.isReleasedWhenClosed = false
             w.center()

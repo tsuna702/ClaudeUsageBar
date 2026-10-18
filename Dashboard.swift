@@ -5,7 +5,7 @@ import Charts
 
 enum DashTab: String, CaseIterable {
     case all, claude, codex
-    var title: String { self == .all ? "전체" : self == .claude ? "Claude" : "Codex" }
+    var title: String { self == .all ? L("전체", "All") : self == .claude ? "Claude" : "Codex" }
     var symbol: String { self == .all ? "square.grid.2x2.fill" : self == .claude ? "sparkle" : "chevron.left.forwardslash.chevron.right" }
     var provider: Provider? { self == .claude ? .claude : self == .codex ? .codex : nil }
 }
@@ -35,7 +35,7 @@ enum Theme {
     }
     static func levelColor(_ l: Int) -> Color { [Color.green, .orange, .red][l] }
     static func levelText(_ l: Int, full: Bool = false) -> String {
-        full ? "소진" : ["여유", "주의", "위험"][l]
+        full ? L("소진", "Empty") : [L("여유", "OK"), L("주의", "Watch"), L("위험", "High")][l]
     }
 }
 
@@ -51,25 +51,25 @@ enum Fmt {
 
     static func duration(_ s: Double) -> String {
         let t = Int(s)
-        if t >= 3600 { return "\(t / 3600)시간 \((t % 3600) / 60)분" }
-        if t >= 60 { return "\(t / 60)분 \(t % 60)초" }
-        return "\(t)초"
+        if t >= 3600 { return L("\(t / 3600)시간 \((t % 3600) / 60)분", "\(t / 3600)h \((t % 3600) / 60)m") }
+        if t >= 60 { return L("\(t / 60)분 \(t % 60)초", "\(t / 60)m \(t % 60)s") }
+        return L("\(t)초", "\(t)s")
     }
 
     static func until(_ d: Date?) -> String {
-        guard let d else { return "초기화 시각 모름" }
+        guard let d else { return L("초기화 시각 모름", "Reset time unknown") }
         let s = Int(d.timeIntervalSinceNow)
-        if s <= 0 { return "곧 초기화" }
-        if s < 3600 { return "\(s / 60)분 후" }
-        if s < 86400 { return "\(s / 3600)시간 \((s % 3600) / 60)분 후" }
-        return "\(s / 86400)일 \((s % 86400) / 3600)시간 후"
+        if s <= 0 { return L("곧 초기화", "Resets soon") }
+        if s < 3600 { return L("\(s / 60)분 후", "in \(s / 60)m") }
+        if s < 86400 { return L("\(s / 3600)시간 \((s % 3600) / 60)분 후", "in \(s / 3600)h \((s % 3600) / 60)m") }
+        return L("\(s / 86400)일 \((s % 86400) / 3600)시간 후", "in \(s / 86400)d \((s % 86400) / 3600)h")
     }
 
     static func span(_ s: Double) -> String {
         let t = Int(s)
-        if t >= 86400 { return "\(t / 86400)일 \((t % 86400) / 3600)시간" }
-        if t >= 3600 { return "\(t / 3600)시간 \((t % 3600) / 60)분" }
-        return "\(max(1, t / 60))분"
+        if t >= 86400 { return L("\(t / 86400)일 \((t % 86400) / 3600)시간", "\(t / 86400)d \((t % 86400) / 3600)h") }
+        if t >= 3600 { return L("\(t / 3600)시간 \((t % 3600) / 60)분", "\(t / 3600)h \((t % 3600) / 60)m") }
+        return L("\(max(1, t / 60))분", "\(max(1, t / 60))m")
     }
 
     // 모델 ID를 읽기 쉽게: claude-opus-5-5 → Opus 5.5
@@ -82,11 +82,11 @@ enum Fmt {
     }
 
     static func ago(_ d: Date?) -> String {
-        guard let d else { return "아직 못 불러옴" }
+        guard let d else { return L("아직 못 불러옴", "Not loaded yet") }
         let s = Int(-d.timeIntervalSinceNow)
-        if s < 60 { return "방금 업데이트" }
-        if s < 3600 { return "\(s / 60)분 전 업데이트" }
-        return "\(s / 3600)시간 전 업데이트"
+        if s < 60 { return L("방금 업데이트", "Updated just now") }
+        if s < 3600 { return L("\(s / 60)분 전 업데이트", "Updated \(s / 60)m ago") }
+        return L("\(s / 3600)시간 전 업데이트", "Updated \(s / 3600)h ago")
     }
 
     static func maskEmail(_ e: String) -> String {
@@ -99,7 +99,7 @@ enum Fmt {
 
     static let yesterday: String = {
         let f = DateFormatter()
-        f.locale = Locale(identifier: "ko_KR")
+        f.locale = Lang.locale
         f.dateFormat = "M/d"
         return f.string(from: Calendar.current.date(byAdding: .day, value: -1, to: Date())!)
     }()
@@ -182,10 +182,10 @@ struct LimitCard: View {
         guard let reset = bucket?.resetsAt else { return nil }
         let left = reset.timeIntervalSinceNow
         let elapsed = window - left
-        if used >= 100 { return ("한도 소진 — 초기화 대기", false) }
+        if used >= 100 { return (L("한도 소진 — 초기화 대기", "Limit reached — waiting for reset"), false) }
         guard used > 0, elapsed > 300, left > 0 else { return nil }
         let toEmpty = (100 - used) / (used / elapsed)
-        return toEmpty < left ? ("이 속도면 \(Fmt.span(toEmpty)) 후 소진", false) : ("이 속도면 초기화 전까지 여유", true)
+        return toEmpty < left ? (L("이 속도면 \(Fmt.span(toEmpty)) 후 소진", "At this pace, empty in \(Fmt.span(toEmpty))"), false) : (L("이 속도면 초기화 전까지 여유", "At this pace, lasts until reset"), true)
     }
 
     var body: some View {
@@ -206,7 +206,7 @@ struct LimitCard: View {
                         .font(.system(size: 30, weight: .bold, design: .rounded)).monospacedDigit()
                     Text("%").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
                     Spacer()
-                    Text("남음").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                    Text(L("남음", "left")).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
                 }
                 ProgressBar(fraction: left / 100, marker: timeLeft)
                 if let eta = forecast(used: used) {
@@ -221,7 +221,7 @@ struct LimitCard: View {
                     Image(systemName: "clock.fill").font(.system(size: 9))
                     Text(Fmt.until(bucket?.resetsAt)).lineLimit(1).minimumScaleFactor(0.8)
                     Spacer()
-                    Text("\(Int(used.rounded()))% 사용")
+                    Text(L("\(Int(used.rounded()))% 사용", "\(Int(used.rounded()))% used"))
                 }
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             }
@@ -266,12 +266,20 @@ struct StatCard: View {
     }
 }
 
+// 캐시로 아낀 비용 문구
+func savedText(_ d: DayStat) -> String {
+    let pct = Int((d.saved / max(0.0001, d.cost + d.saved)) * 100)
+    return L("캐시로 \(Fmt.money(d.saved)) 절약 (\(pct)%)", "Cache saved \(Fmt.money(d.saved)) (\(pct)%)")
+}
+
 // 어제 대비 증감 문구
 func compare(_ today: Double, _ yesterday: Double, _ format: (Double) -> String) -> (text: String, lower: Bool)? {
     guard yesterday > 0 else { return nil }
     let diff = today - yesterday
     let pct = abs(diff) / yesterday * 100
-    return ("\(Fmt.yesterday) 대비 \(diff < 0 ? "-" : "+")\(format(abs(diff))) (\(String(format: "%.0f", pct))%)", diff < 0)
+    let sign = diff < 0 ? "-" : "+"
+    let body = "\(sign)\(format(abs(diff))) (\(String(format: "%.0f", pct))%)"
+    return (L("\(Fmt.yesterday) 대비 \(body)", "vs \(Fmt.yesterday) \(body)"), diff < 0)
 }
 
 // MARK: - 계정 줄
@@ -341,22 +349,22 @@ struct DailyChart: View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
-                    CardTitle(symbol: "chart.bar.fill", color: .yellow, text: "일별 사용량 — 최근 30일")
+                    CardTitle(symbol: "chart.bar.fill", color: .yellow, text: L("일별 사용량 — 최근 30일", "Daily usage — last 30 days"))
                     Spacer()
                     VStack(alignment: .trailing, spacing: 1) {
                         Text(cost ? Fmt.money(total) : Fmt.tokens(total)).font(.system(size: 17, weight: .bold, design: .rounded))
-                        Text(cost ? "30일 합계 (API 환산)" : "30일 토큰").font(.system(size: 10)).foregroundStyle(.secondary)
+                        Text(cost ? L("30일 합계 (API 환산)", "30-day total (API rates)") : L("30일 토큰", "30-day tokens")).font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                 }
                 if stats.hasCost {
                     HStack(spacing: 6) {
-                        pill("비용", on: ui.chartCost) { ui.chartCost = true }
-                        pill("토큰", on: !ui.chartCost) { ui.chartCost = false }
+                        pill(L("비용", "Cost"), on: ui.chartCost) { ui.chartCost = true }
+                        pill(L("토큰", "Tokens"), on: !ui.chartCost) { ui.chartCost = false }
                     }
                 }
                 Chart {
                     ForEach(Array(data.enumerated()), id: \.offset) { i, d in
-                        BarMark(x: .value("날짜", d.date, unit: .day), y: .value("값", values[i]))
+                        BarMark(x: .value("date", d.date, unit: .day), y: .value("value", values[i]))
                             .foregroundStyle(provider == .claude ? Color.orange.gradient : Color.teal.gradient)
                             .cornerRadius(2)
                     }
@@ -395,15 +403,15 @@ struct HourlyChart: View {
         Card {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    CardTitle(symbol: "waveform.path.ecg", color: .blue, text: "오늘 시간대별")
+                    CardTitle(symbol: "waveform.path.ecg", color: .blue, text: L("오늘 시간대별", "Today by hour"))
                     Spacer()
                     if let peak, (cost ? peak.stat.cost : peak.stat.tokens) > 0 {
-                        Text("가장 많이 쓴 시간 \(peak.hour)시").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(L("가장 많이 쓴 시간 \(peak.hour)시", "Peak \(peak.hour):00")).font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
                 Chart {
                     ForEach(rows, id: \.hour) { r in
-                        BarMark(x: .value("시", r.hour), y: .value("값", cost ? r.stat.cost : r.stat.tokens))
+                        BarMark(x: .value("hour", r.hour), y: .value("value", cost ? r.stat.cost : r.stat.tokens))
                             .foregroundStyle(r.hour == now ? AnyShapeStyle(Theme.accent.gradient) : AnyShapeStyle(Color.blue.opacity(0.55).gradient))
                             .cornerRadius(2)
                     }
@@ -411,7 +419,7 @@ struct HourlyChart: View {
                 .chartXScale(domain: -0.5...23.5)
                 .chartXAxis {
                     AxisMarks(values: [0, 6, 12, 18, 23]) { v in
-                        AxisValueLabel { if let h = v.as(Int.self) { Text("\(h)시").font(.system(size: 9)) } }
+                        AxisValueLabel { if let h = v.as(Int.self) { Text(L("\(h)시", "\(h):00")).font(.system(size: 9)) } }
                     }
                 }
                 .chartYAxis {
@@ -440,17 +448,17 @@ struct RankCard: View {
         let maxTokens = rows.first?.agg.tokens ?? 1
         Card {
             VStack(alignment: .leading, spacing: 10) {
-                CardTitle(symbol: "list.number", color: .indigo, text: ui.byProject ? "프로젝트별 사용" : "모델별 사용")
+                CardTitle(symbol: "list.number", color: .indigo, text: ui.byProject ? L("프로젝트별 사용", "Usage by project") : L("모델별 사용", "Usage by model"))
                 HStack(spacing: 6) {
-                    pill("모델", on: !ui.byProject) { ui.byProject = false }
-                    pill("프로젝트", on: ui.byProject) { ui.byProject = true }
+                    pill(L("모델", "Model"), on: !ui.byProject) { ui.byProject = false }
+                    pill(L("프로젝트", "Project"), on: ui.byProject) { ui.byProject = true }
                     Spacer()
                     ForEach([1, 7, 30], id: \.self) { d in
-                        pill(d == 1 ? "오늘" : "\(d)일", on: ui.rankDays == d) { ui.rankDays = d }
+                        pill(d == 1 ? L("오늘", "Today") : L("\(d)일", "\(d)d"), on: ui.rankDays == d) { ui.rankDays = d }
                     }
                 }
                 if rows.isEmpty {
-                    Text("이 기간에는 기록이 없어요").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text(L("이 기간에는 기록이 없어요", "No activity in this period")).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 ForEach(rows, id: \.name) { r in
                     VStack(alignment: .leading, spacing: 4) {
@@ -492,6 +500,7 @@ struct DashboardView: View {
     let onSettings: () -> Void
     let onQuit: () -> Void
     var flat = false   // 스냅샷용: 스크롤 없이 전체를 그림
+    @AppStorage(Lang.key) var lang = "system"   // 바뀌면 전체를 다시 그림
 
     var providers: [Provider] { Provider.allCases.filter(Pref.enabled) }
 
@@ -517,6 +526,7 @@ struct DashboardView: View {
             footer
         }
         .padding(16)
+        .id(lang)
         .frame(width: 400, height: flat ? nil : ui.height)
         .background(
             LinearGradient(colors: [Theme.accent.opacity(0.10), Color.purple.opacity(0.06), .clear],
@@ -529,13 +539,13 @@ struct DashboardView: View {
             Image(nsImage: Theme.appIcon).resizable().interpolation(.high).frame(width: 48, height: 48)
             VStack(alignment: .leading, spacing: 1) {
                 Text("UsageBar").font(.system(size: 18, weight: .bold))
-                Text("AI 사용량 모니터").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(L("AI 사용량 모니터", "AI usage monitor")).font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Spacer()
             HStack(spacing: 6) {
                 Circle().fill(Theme.levelColor(overall)).frame(width: 9, height: 9)
                     .overlay(Circle().stroke(Theme.levelColor(overall).opacity(0.3), lineWidth: 4))
-                Text(["정상", "주의", "한도 임박"][overall]).font(.system(size: 12, weight: .semibold))
+                Text([L("정상", "Healthy"), L("주의", "Watch"), L("한도 임박", "Near limit")][overall]).font(.system(size: 12, weight: .semibold))
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(Capsule().fill(Color(nsColor: .textBackgroundColor).opacity(0.8)))
@@ -587,8 +597,8 @@ struct DashboardView: View {
     func limits(_ p: Provider) -> some View {
         let q = store.quotas[p]
         return HStack(spacing: 10) {
-            LimitCard(title: "세션", symbol: "bolt.fill", bucket: q?.session, window: 5 * 3600, limitReached: q?.limitReached ?? false)
-            LimitCard(title: "주간", symbol: "calendar", bucket: q?.weekly, window: 7 * 86400, limitReached: q?.limitReached ?? false)
+            LimitCard(title: L("세션", "Session"), symbol: "bolt.fill", bucket: q?.session, window: 5 * 3600, limitReached: q?.limitReached ?? false)
+            LimitCard(title: L("주간", "Weekly"), symbol: "calendar", bucket: q?.weekly, window: 7 * 86400, limitReached: q?.limitReached ?? false)
         }
     }
 
@@ -598,7 +608,7 @@ struct DashboardView: View {
         if !rows.isEmpty {
             Card {
                 VStack(alignment: .leading, spacing: 10) {
-                    CardTitle(symbol: "number.circle.fill", color: .green, text: "오늘 사용")
+                    CardTitle(symbol: "number.circle.fill", color: .green, text: L("오늘 사용", "Today"))
                     ForEach(rows, id: \.0) { p, d in
                         HStack {
                             HStack(spacing: 5) {
@@ -606,7 +616,7 @@ struct DashboardView: View {
                                 Text(p.logo == nil ? "\(p.icon) \(p.name)" : p.name).font(.system(size: 13, weight: .semibold))
                             }
                             Spacer()
-                            Text("\(Fmt.tokens(d.tokens)) 토큰").monospacedDigit()
+                            Text(L("\(Fmt.tokens(d.tokens)) 토큰", "\(Fmt.tokens(d.tokens)) tokens")).monospacedDigit()
                             if p == .claude { Text("· \(Fmt.money(d.cost))").foregroundStyle(.secondary).monospacedDigit() }
                             Text("· \(Fmt.duration(d.seconds))").foregroundStyle(.secondary)
                         }
@@ -639,20 +649,20 @@ struct DashboardView: View {
             let today = s.day(offset: 0), yday = s.day(offset: 1)
             HStack(spacing: 10) {
                 if s.hasCost {
-                    StatCard(title: "오늘 비용", symbol: "dollarsign.circle.fill", color: .yellow,
-                             value: Fmt.money(today.cost), unit: "API 환산",
-                             sub: today.saved > 0 ? "캐시로 \(Fmt.money(today.saved)) 절약 (\(Int((today.saved / max(0.0001, today.cost + today.saved)) * 100))%)" : nil,
+                    StatCard(title: L("오늘 비용", "Cost today"), symbol: "dollarsign.circle.fill", color: .yellow,
+                             value: Fmt.money(today.cost), unit: L("API 환산", "API rates"),
+                             sub: today.saved > 0 ? savedText(today) : nil,
                              fraction: today.cost / max(0.0001, today.cost + today.saved),
                              delta: compare(today.cost, yday.cost, Fmt.money))
                 }
-                StatCard(title: "오늘 토큰", symbol: "number.circle.fill", color: .green,
-                         value: Fmt.tokens(today.tokens), unit: "토큰",
-                         sub: "\(Int((today.cacheRatio * 100).rounded()))% 캐시 사용",
+                StatCard(title: L("오늘 토큰", "Tokens today"), symbol: "number.circle.fill", color: .green,
+                         value: Fmt.tokens(today.tokens), unit: L("토큰", "Tokens"),
+                         sub: L("\(Int((today.cacheRatio * 100).rounded()))% 캐시 사용", "\(Int((today.cacheRatio * 100).rounded()))% from cache"),
                          fraction: today.cacheRatio,
                          delta: compare(today.tokens, yday.tokens, Fmt.tokens))
             }
-            StatCard(title: "오늘 작업 시간", symbol: "clock.fill", color: .purple,
-                     value: Fmt.duration(today.seconds), unit: "작업 시간", sub: nil,
+            StatCard(title: L("오늘 작업 시간", "Working time today"), symbol: "clock.fill", color: .purple,
+                     value: Fmt.duration(today.seconds), unit: L("작업 시간", "Duration"), sub: nil,
                      fraction: min(1, today.seconds / (8 * 3600)),
                      delta: compare(today.seconds, yday.seconds, Fmt.duration))
             HourlyChart(provider: p, stats: s, ui: ui)
@@ -664,7 +674,7 @@ struct DashboardView: View {
             if !rows.isEmpty {
                 Card {
                     VStack(alignment: .leading, spacing: 8) {
-                        CardTitle(symbol: "chart.pie.fill", color: .pink, text: "주간 사용 비중")
+                        CardTitle(symbol: "chart.pie.fill", color: .pink, text: L("주간 사용 비중", "Weekly usage share"))
                         ForEach(rows.indices, id: \.self) { i in
                             HStack {
                                 Text(rows[i].0).font(.system(size: 12))
@@ -682,13 +692,13 @@ struct DashboardView: View {
 
     var footer: some View {
         HStack(spacing: 8) {
-            footerButton("대시보드", "safari") {
+            footerButton(L("대시보드", "Dashboard"), "safari") {
                 NSWorkspace.shared.open((ui.tab.provider ?? providers.first ?? .claude).webURL)
             }
-            footerButton(store.loading ? "불러오는 중" : "새로고침", "arrow.clockwise", action: onRefresh)
+            footerButton(store.loading ? L("불러오는 중", "Loading") : L("새로고침", "Refresh"), "arrow.clockwise", action: onRefresh)
             Spacer()
-            circleButton("gearshape.fill", help: "설정", action: onSettings)
-            circleButton("power", help: "종료", action: onQuit)
+            circleButton("gearshape.fill", help: L("설정", "Settings"), action: onSettings)
+            circleButton("power", help: L("종료", "Quit"), action: onQuit)
         }
     }
 

@@ -22,7 +22,7 @@ enum Notify {
     // 창마다 "초기화 시각 | 마지막으로 알린 단계"를 저장해 같은 알림을 반복하지 않음
     static func check(_ p: Provider, _ q: Quota) {
         let d = UserDefaults.standard
-        for (name, b) in [("세션", q.session), ("주간", q.weekly)] {
+        for (name, label, b) in [("세션", L("세션", "session"), q.session), ("주간", L("주간", "weekly"), q.weekly)] {
             guard let b else { continue }
             let key = "notified.\(p.rawValue).\(name)"
             let reset = Int(b.resetsAt?.timeIntervalSince1970 ?? 0)
@@ -37,14 +37,19 @@ enum Notify {
             if sameWindow {
                 if level > prevLevel, level > 0, d.bool(forKey: enabledKey) {
                     let left = max(0, 100 - b.percent)
-                    let title = level == 3 ? "\(p.name) \(name) 한도를 다 썼어요" : "\(p.name) \(name) 사용량 \(Int(b.percent.rounded()))%"
-                    send(title, "남은 양 \(Int(left.rounded()))% · \(Fmt.until(b.resetsAt))")
+                    let used = Int(b.percent.rounded())
+                    let title = level == 3
+                        ? L("\(p.name) \(label) 한도를 다 썼어요", "\(p.name) \(label) limit used up")
+                        : L("\(p.name) \(label) 사용량 \(used)%", "\(p.name) \(label) usage at \(used)%")
+                    send(title, L("남은 양 \(Int(left.rounded()))% · \(Fmt.until(b.resetsAt))", "\(Int(left.rounded()))% left · resets \(Fmt.until(b.resetsAt))"))
                 }
                 d.set("\(reset)|\(max(level, prevLevel))", forKey: key)
             } else {
                 // 새 창으로 바뀜: 이전 창에서 주의 이상이었으면 초기화 알림
                 if prevLevel > 0, d.bool(forKey: resetKey) {
-                    send("\(p.name) \(name) 한도가 초기화됐어요", "지금 \(Int(max(0, 100 - b.percent).rounded()))% 남아 있어요")
+                    let now = Int(max(0, 100 - b.percent).rounded())
+                    send(L("\(p.name) \(label) 한도가 초기화됐어요", "\(p.name) \(label) limit has reset"),
+                         L("지금 \(now)% 남아 있어요", "\(now)% available now"))
                 }
                 d.set("\(reset)|\(level)", forKey: key)
             }

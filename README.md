@@ -1,46 +1,48 @@
 # UsageBar
 
-Claude와 Codex 사용량을 macOS 메뉴 막대에서 보여주는 앱이에요.
+[한국어](README.ko.md)
 
-## 기능
+A macOS menu bar app that shows your Claude and Codex usage limits.
 
-- **메뉴 막대**: 세션(5시간)·주간 사용량, 남은 양, 초기화까지 남은 시간을 표시해요. 보일 요소는 설정에서 하나씩 켜고 끌 수 있어요.
-- **대시보드** (아이콘 왼쪽 클릭)
-  - 세션·주간 한도와 소진 예상 시각 ("이 속도면 2시간 후 소진")
-  - 오늘 비용(API 요금 환산)·토큰·작업 시간, 어제 대비 증감
-  - 오늘 시간대별 그래프, 최근 30일 일별 그래프
-  - 모델별·프로젝트별 사용 순위 (오늘 / 7일 / 30일)
-- **알림**: 사용량이 경고 기준을 넘을 때, 한도에 가까웠던 창이 초기화될 때 알려줘요.
-- **계정 연결**: 공식 CLI(`claude auth login`, `codex login`)로 로그인하고, 로그인이 끝나면 자동으로 사용량을 불러와요.
-- 라이트·다크 모드를 지원하고, 로그인 시 자동 실행을 켤 수 있어요.
+## Features
 
-## 데이터 출처
+- **Menu bar**: session (5h) and weekly usage, remaining amount, and time until reset. Each element can be turned on or off in Settings.
+- **Dashboard** (left-click the icon)
+  - Session and weekly limits with a burn-rate forecast ("At this pace, empty in 2h")
+  - Today's cost (at API rates), tokens, and working time, compared with yesterday
+  - Today-by-hour chart and a 30-day daily chart
+  - Usage ranked by model or project (today / 7 days / 30 days)
+- **Notifications** when usage crosses a warning level, and when a nearly used-up limit resets.
+- **Account login** through the official CLIs (`claude auth login`, `codex login`); usage loads automatically when you finish.
+- Korean and English UI (follows the system language by default), light and dark mode, launch at login.
 
-| 항목 | 출처 |
+## Where the data comes from
+
+| Item | Source |
 |---|---|
-| Claude 한도 | Claude Code 로그인 정보(키체인)로 `api.anthropic.com/api/oauth/usage` 호출 |
-| Codex 한도 | `~/.codex/auth.json`으로 `chatgpt.com/backend-api/wham/usage` 호출 |
-| 토큰·비용·작업 시간 | `~/.claude/projects`, `~/.codex/sessions`의 로컬 기록 |
+| Claude limits | `api.anthropic.com/api/oauth/usage`, using the Claude Code login in the Keychain |
+| Codex limits | `chatgpt.com/backend-api/wham/usage`, using `~/.codex/auth.json` |
+| Tokens, cost, working time | Local logs in `~/.claude/projects` and `~/.codex/sessions` |
 
-비용은 공식 API 가격으로 계산한 값이라 구독 요금제에서 실제로 내는 돈과는 달라요. Claude 토큰이 만료되면 Claude Code와 같은 방식으로 갱신해서 키체인에 다시 저장해요.
+Cost is calculated at public API prices, so it is not what you pay on a subscription plan. When the Claude token expires, the app refreshes it the same way Claude Code does and saves it back to the Keychain.
 
-## 빌드
+## Build
 
-Xcode Command Line Tools만 있으면 돼요 (macOS 14 이상).
+Requires Xcode Command Line Tools and macOS 14 or later.
 
 ```bash
 ./build.sh
 open ClaudeUsageBar.app
 ```
 
-앱 아이콘을 다시 만들려면:
+To regenerate the app icon:
 
 ```bash
 swift tools/make_icon.swift Resources && iconutil -c icns Resources/AppIcon.iconset -o Resources/AppIcon.icns && rm -rf Resources/AppIcon.iconset
 ```
 
-## 개발용 환경 변수
+## Development environment variables
 
-- `USAGE_DEBUG=1`: 불러온 값을 표준 출력에 찍어요.
-- `USAGE_SNAPSHOT=<폴더>`: 대시보드 탭별 화면을 PNG로 저장해요 (라이트·다크).
-- `USAGE_OPEN=1`: 실행하자마자 대시보드를 열어요.
+- `USAGE_DEBUG=1`: print loaded values to stdout.
+- `USAGE_SNAPSHOT=<folder>`: save each dashboard tab as PNG (light and dark).
+- `USAGE_OPEN=1`: open the dashboard right after launch.
