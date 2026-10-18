@@ -8,6 +8,8 @@ VERSION="${VERSION#v}"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+mkdir -p "$APP/Contents/Resources/Logos"
+cp Resources/Logos/*.svg "$APP/Contents/Resources/Logos/"
 # Apple Silicon과 인텔용을 각각 빌드해서 하나로 합침 (유니버설)
 TMP=$(mktemp -d)
 for ARCH in arm64 x86_64; do

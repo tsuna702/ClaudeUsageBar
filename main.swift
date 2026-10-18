@@ -150,7 +150,8 @@ enum Provider: String, CaseIterable {
     var logo: NSImage? {
         if let c = Provider.logoCache[self] { return c }
         if ProcessInfo.processInfo.environment["USAGE_NOLOGO"] != nil { return nil }
-        let img = appURL.map { flatIcon(NSWorkspace.shared.icon(forFile: $0.path)) }
+        // 공식 앱 아이콘이 있으면 그것을, 없으면 함께 넣은 로고 타일
+        let img = appURL.map { flatIcon(NSWorkspace.shared.icon(forFile: $0.path)) } ?? LogoTile.make(self)
         Provider.logoCache[self] = img
         return img
     }
