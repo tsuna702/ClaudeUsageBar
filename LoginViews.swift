@@ -9,6 +9,7 @@ struct AccountSettingRow: View {
         let loggedIn = store.loggedIn[provider] ?? false
         let hasCLI = LoginHelper.cliPath(provider) != nil
         let cliName = provider == .claude ? "Claude Code" : "Codex"
+        VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 10) {
             if let logo = provider.logo {
                 Image(nsImage: logo).resizable().frame(width: 24, height: 24)
@@ -24,7 +25,62 @@ struct AccountSettingRow: View {
             if !hasCLI {
                 Button(L("설치 안내", "Install")) { NSWorkspace.shared.open(LoginHelper.installURL(provider)) }
             } else {
-                Button(loggedIn ? L("계정 바꾸기", "Switch account") : L("로그인", "Sign in")) { LoginHelper.login(provider) }
+                Button(loggedIn ? L("다른 계정으로 로그인", "Sign in to another") : L("로그인", "Sign in")) { LoginHelper.login(provider) }
+            }
+        }
+        savedList
+        }
+    }
+
+    // 저장된 계정 목록: 고르면 전환
+    @ViewBuilder var savedList: some View {
+        let current = store.quotas[provider]?.email
+        let saved = store.savedAccounts.filter { $0.provider == provider.rawValue }
+        if !saved.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(saved, id: \.self) { acc in
+                    HStack(spacing: 8) {
+                        Image(systemName: acc.email == current ? "checkmark.circle.fill" : "person.circle")
+                            .foregroundStyle(acc.email == current ? Color.green : Color.secondary)
+                        Text(acc.email).font(.system(size: 12))
+                        if acc.email == current {
+                            Text(L("사용 중", "Active")).font(.system(size: 10, weight: .bold)).foregroundStyle(.green)
+                        }
+                        Spacer()
+                        if acc.email != current {
+                            Button(L("전환", "Switch")) { switchTo(acc, current: current) }.controlSize(.small)
+                        }
+                        Button { AccountStore.remove(acc); store.savedAccounts = AccountStore.all } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless).controlSize(.small)
+                        .help(L("이 앱에 저장된 정보만 지워요", "Removes only what this app saved"))
+                    }
+                }
+            }
+            .padding(.leading, 34)
+        }
+    }
+
+    func switchTo(_ acc: SavedAccount, current: String?) {
+        let target = provider == .claude ? "Claude Code" : "Codex"
+        let alert = NSAlert()
+        alert.messageText = L("\(acc.email) 계정으로 전환할까요?", "Switch to \(acc.email)?")
+        alert.informativeText = L("\(target)도 이 계정으로 바뀌어요. 실행 중인 \(target)는 다시 시작해야 반영될 수 있어요.",
+                                  "\(target) will also use this account. A running \(target) may need a restart.")
+        alert.addButton(withTitle: L("전환", "Switch"))
+        alert.addButton(withTitle: L("취소", "Cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let err = AccountStore.switchTo(acc, currentEmail: current)
+            DispatchQueue.main.async {
+                store.savedAccounts = AccountStore.all
+                if let err {
+                    let a = NSAlert()
+                    a.messageText = L("전환하지 못했어요", "Could not switch")
+                    a.informativeText = err
+                    a.runModal()
+                }
             }
         }
     }

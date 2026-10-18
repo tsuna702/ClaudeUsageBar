@@ -21,6 +21,7 @@ struct Quota {
     var plan: String?
     var email: String?
     var limitReached = false
+    var extras2: [(label: String, value: String)] = []   // 추가 사용량 · 크레딧
 
     static let sample = Quota(session: Bucket(percent: 12, resetsAt: nil), weekly: Bucket(percent: 45, resetsAt: nil))
 }
@@ -80,6 +81,15 @@ struct ClaudeUsage: Decodable {
     let seven_day_opus: ClaudeWindow?
     let seven_day_sonnet: ClaudeWindow?
     let seven_day_breakdown: Breakdown?
+    struct Extra: Decodable {
+        let is_enabled: Bool?
+        let monthly_limit: Double?
+        let used_credits: Double?
+        let utilization: Double?
+        let currency: String?
+        let decimal_places: Int?
+    }
+    let extra_usage: Extra?
 }
 
 func parseISO(_ s: String?) -> Date? {
@@ -214,6 +224,21 @@ enum ClaudeAPI {
             let oauth = readCredentials()?["claudeAiOauth"] as? [String: Any]
             q.plan = oauth?["subscriptionType"] as? String
             q.email = accountEmail()
+            if let x = u.extra_usage {
+                if x.is_enabled == true {
+                    // 금액은 최소 단위(센트 등)로 오므로 소수 자릿수만큼 나눔
+                    let div = pow(10, Double(x.decimal_places ?? 2))
+                    let cur = x.currency ?? "USD"
+                    let used = (x.used_credits ?? 0) / div
+                    let limit = x.monthly_limit.map { $0 / div }
+                    var v = String(format: "%.2f %@", used, cur)
+                    if let limit { v += String(format: " / %.2f", limit) }
+                    if let ut = x.utilization { v += " (\(Int(ut.rounded()))%)" }
+                    q.extras2.append((L("추가 사용량 (이번 달)", "Extra usage (this month)"), v))
+                } else {
+                    q.extras2.append((L("추가 사용량", "Extra usage"), L("꺼짐", "Off")))
+                }
+            }
             done(q, nil)
         }.resume()
     }
@@ -236,6 +261,10 @@ struct CodexUsage: Decodable {
     let plan_type: String?
     let email: String?
     let rate_limit: RateLimit?
+    struct Credits: Decodable { let has_credits: Bool?; let unlimited: Bool?; let balance: String? }
+    struct ResetCredits: Decodable { let available_count: Int? }
+    let credits: Credits?
+    let rate_limit_reset_credits: ResetCredits?
 }
 
 enum CodexAPI {
@@ -275,6 +304,13 @@ enum CodexAPI {
             }
             q.plan = u.plan_type
             q.email = u.email
+            if let c = u.credits {
+                let v = c.unlimited == true ? L("무제한", "Unlimited") : (c.balance ?? "0")
+                q.extras2.append((L("크레딧 잔액", "Credit balance"), v))
+            }
+            if let n = u.rate_limit_reset_credits?.available_count {
+                q.extras2.append((L("한도 리셋 사용 가능", "Limit resets available"), L("\(n)회", "\(n)")))
+            }
             q.limitReached = u.rate_limit?.limit_reached ?? false
             done(q, nil)
         }.resume()
@@ -410,6 +446,9 @@ final class UsageStore: ObservableObject {
     @Published var local: [Provider: LocalStats] = [:]
     @Published var loading = false
     @Published var loggedIn: [Provider: Bool] = [:]
+    @Published var update: UpdateInfo?
+    @Published var savedAccounts: [SavedAccount] = AccountStore.all
+    @Published var updateStatus = ""
 }
 
 // 로그인 시 자동 실행 상태
@@ -549,6 +588,25 @@ struct SettingsView: View {
                 Text(loginError).font(.caption).foregroundStyle(.red)
             }
         }
+        Section(L("업데이트", "Updates")) {
+            LabeledContent(L("현재 버전", "Current version"), value: Updater.current)
+            HStack {
+                Text(store.updateStatus).font(.caption).foregroundStyle(store.update == nil ? Color.secondary : Color.accentColor)
+                Spacer()
+                if let u = store.update {
+                    Button(L("다운로드 페이지 열기", "Open download page")) { NSWorkspace.shared.open(u.url) }
+                }
+                Button(L("지금 확인", "Check now")) { (NSApp.delegate as? AppDelegate)?.checkUpdate() }
+            }
+        }
+        Section(L("데이터", "Data")) {
+            LabeledContent(L("사용 기록 내보내기", "Export usage")) {
+                Button(L("CSV로 내보내기…", "Export CSV…")) { Export.save(store) }
+            }
+            Text(L("최근 30일 일별 · 모델별 · 프로젝트별 집계와 한도 사용 기록(최근 8일)을 담아요.",
+                   "Includes daily, per-model and per-project totals for the last 30 days, plus limit history (last 8 days)."))
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder var accountsPage: some View {
@@ -658,6 +716,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
         refresh()
         scheduleTimer()
+        // 업데이트 확인: 실행할 때 + 하루에 한 번
+        checkUpdate()
+        Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in self?.checkUpdate() }
         // 개발용: 실행하자마자 대시보드를 열어 위치 확인
         if ProcessInfo.processInfo.environment["USAGE_OPEN"] != nil, let b = statusItem.button {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
@@ -749,6 +810,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         if let q {
                             self.store.quotas[p] = q; self.store.updated[p] = Date(); self.lastUpdated = Date()
                             if Pref.enabled(p) { Notify.check(p, q) }
+                            History.record(p, q)
+                            // 로그인된 계정을 자동으로 저장해 두어 나중에 전환할 수 있게 함
+                            if let email = q.email {
+                                DispatchQueue.global(qos: .utility).async {
+                                    AccountStore.saveCurrent(p, email: email)
+                                    DispatchQueue.main.async { self.store.savedAccounts = AccountStore.all }
+                                }
+                            }
                         }
                         let loggedIn = LoginHelper.isLoggedIn(p)
                         self.store.loggedIn[p] = loggedIn
@@ -762,6 +831,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.finishOne()
                     }
                 }
+            }
+        }
+    }
+
+    @objc func checkUpdate() {
+        store.updateStatus = L("확인 중…", "Checking…")
+        Updater.check { info, err in
+            DispatchQueue.main.async {
+                self.store.update = info
+                if let err { self.store.updateStatus = L("확인 실패: ", "Check failed: ") + err }
+                else if let info { self.store.updateStatus = L("새 버전 \(info.version)이 있어요", "\(info.version) is available") }
+                else { self.store.updateStatus = L("최신 버전이에요", "You're up to date") }
             }
         }
     }

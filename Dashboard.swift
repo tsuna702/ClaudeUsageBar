@@ -17,7 +17,8 @@ final class DashState: ObservableObject {
     @Published var showEmail = false
     @Published var height: CGFloat = 760
     @Published var byProject = false        // 사용 순위: 모델 / 프로젝트
-    @Published var rankDays = 7             // 사용 순위 기간: 1 / 7 / 30일   // 팝오버 전체 높이 (열 때 화면에 맞춰 정함)
+    @Published var rankDays = 7             // 사용 순위 기간: 1 / 7 / 30일
+    @Published var trendWeekly = false      // 사용 추이: 세션 / 주간   // 팝오버 전체 높이 (열 때 화면에 맞춰 정함)
 }
 
 // MARK: - 색과 포맷
@@ -176,15 +177,24 @@ struct LimitCard: View {
     let bucket: Bucket?
     let window: Double          // 창 길이(초)
     let limitReached: Bool
+    var recentRate: Double? = nil   // 기록으로 구한 최근 속도 (%/초)
 
-    // 소진 예상: 이 창이 시작된 뒤 평균 속도로 계속 쓰면 언제 100%가 되는지
+    // 소진 예상: 최근 45분 기록이 있으면 그 속도로, 없으면 창이 시작된 뒤 평균 속도로 계산
     func forecast(used: Double) -> (text: String, ok: Bool)? {
         guard let reset = bucket?.resetsAt else { return nil }
         let left = reset.timeIntervalSinceNow
         let elapsed = window - left
         if used >= 100 { return (L("한도 소진 — 초기화 대기", "Limit reached — waiting for reset"), false) }
-        guard used > 0, elapsed > 300, left > 0 else { return nil }
-        let toEmpty = (100 - used) / (used / elapsed)
+        guard left > 0 else { return nil }
+        let rate: Double
+        if let r = recentRate {
+            if r <= 0 { return (L("최근 사용 없음 — 여유", "No recent use — on track"), true) }
+            rate = r
+        } else {
+            guard used > 0, elapsed > 300 else { return nil }
+            rate = used / elapsed
+        }
+        let toEmpty = (100 - used) / rate
         return toEmpty < left ? (L("이 속도면 \(Fmt.span(toEmpty)) 후 소진", "At this pace, empty in \(Fmt.span(toEmpty))"), false) : (L("이 속도면 초기화 전까지 여유", "At this pace, lasts until reset"), true)
     }
 
@@ -436,6 +446,66 @@ struct HourlyChart: View {
     }
 }
 
+// MARK: - 한도 사용 추이 (기록한 %를 선으로)
+
+struct TrendChart: View {
+    let provider: Provider
+    let quota: Quota
+    @ObservedObject var ui: DashState
+
+    var body: some View {
+        let kind: LimitKind = ui.trendWeekly ? .weekly : .session
+        let bucket = ui.trendWeekly ? quota.weekly : quota.session
+        let window: Double = ui.trendWeekly ? 7 * 86400 : 5 * 3600
+        let pts = History.series(provider, kind, current: bucket)
+        let end = bucket?.resetsAt ?? Date()
+        let start = end.addingTimeInterval(-window)
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    CardTitle(symbol: "chart.xyaxis.line", color: .mint, text: L("한도 사용 추이", "Limit Usage Trend"))
+                    Spacer()
+                    pill(L("세션", "Session"), on: !ui.trendWeekly) { ui.trendWeekly = false }
+                    pill(L("주간", "Weekly"), on: ui.trendWeekly) { ui.trendWeekly = true }
+                }
+                if pts.count < 2 {
+                    Text(L("기록을 모으는 중이에요. 새로고침이 몇 번 쌓이면 그래프가 나와요.",
+                           "Collecting history. The chart appears after a few refreshes."))
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 60, alignment: .center)
+                } else {
+                    Chart {
+                        ForEach(pts.indices, id: \.self) { i in
+                            AreaMark(x: .value("time", pts[i].date), y: .value("percent", pts[i].percent))
+                                .foregroundStyle(LinearGradient(colors: [Color.mint.opacity(0.35), Color.mint.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+                            LineMark(x: .value("time", pts[i].date), y: .value("percent", pts[i].percent))
+                                .foregroundStyle(Color.mint)
+                                .lineStyle(StrokeStyle(lineWidth: 2))
+                        }
+                        RuleMark(x: .value("now", Date())).foregroundStyle(Color.secondary.opacity(0.4))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    }
+                    .chartXScale(domain: start...end)
+                    .chartYScale(domain: 0...100)
+                    .chartYAxis {
+                        AxisMarks(position: .trailing, values: [0, 50, 100]) { v in
+                            AxisGridLine()
+                            AxisValueLabel { if let d = v.as(Int.self) { Text("\(d)%").font(.system(size: 9)) } }
+                        }
+                    }
+                    .chartXAxis {
+                        AxisMarks(values: .automatic(desiredCount: 4)) { _ in
+                            AxisValueLabel(format: ui.trendWeekly ? .dateTime.month(.defaultDigits).day() : .dateTime.hour().minute())
+                                .font(.system(size: 9))
+                        }
+                    }
+                    .frame(height: 90)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - 모델·프로젝트별 순위
 
 struct RankCard: View {
@@ -579,6 +649,19 @@ struct DashboardView: View {
     }
 
     @ViewBuilder var content: some View {
+        if let u = store.update {
+            Button { NSWorkspace.shared.open(u.url) } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+                    Text(L("새 버전 \(u.version)이 나왔어요", "\(u.version) is available")).font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Text(L("다운로드", "Download")).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.accentColor)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.12)))
+            }
+            .buttonStyle(.plain)
+        }
         if let p = ui.tab.provider, Pref.enabled(p) {
             detail(p)
         } else {
@@ -597,8 +680,10 @@ struct DashboardView: View {
     func limits(_ p: Provider) -> some View {
         let q = store.quotas[p]
         return HStack(spacing: 10) {
-            LimitCard(title: L("세션", "Session"), symbol: "bolt.fill", bucket: q?.session, window: 5 * 3600, limitReached: q?.limitReached ?? false)
-            LimitCard(title: L("주간", "Weekly"), symbol: "calendar", bucket: q?.weekly, window: 7 * 86400, limitReached: q?.limitReached ?? false)
+            LimitCard(title: L("세션", "Session"), symbol: "bolt.fill", bucket: q?.session, window: 5 * 3600, limitReached: q?.limitReached ?? false,
+                      recentRate: History.recentRate(p, .session, current: q?.session))
+            LimitCard(title: L("주간", "Weekly"), symbol: "calendar", bucket: q?.weekly, window: 7 * 86400, limitReached: q?.limitReached ?? false,
+                      recentRate: History.recentRate(p, .weekly, current: q?.weekly))
         }
     }
 
@@ -645,6 +730,9 @@ struct DashboardView: View {
                 }
             }
         }
+        if let q = store.quotas[p] {
+            TrendChart(provider: p, quota: q, ui: ui)
+        }
         if let s = store.local[p] {
             let today = s.day(offset: 0), yday = s.day(offset: 1)
             HStack(spacing: 10) {
@@ -668,6 +756,20 @@ struct DashboardView: View {
             HourlyChart(provider: p, stats: s, ui: ui)
             DailyChart(provider: p, stats: s, ui: ui)
             RankCard(provider: p, stats: s, ui: ui)
+        }
+        if let q = store.quotas[p], !q.extras2.isEmpty {
+            Card {
+                VStack(alignment: .leading, spacing: 8) {
+                    CardTitle(symbol: "creditcard.fill", color: .teal, text: L("추가 사용량 · 크레딧", "Extra Usage · Credits"))
+                    ForEach(q.extras2.indices, id: \.self) { i in
+                        HStack {
+                            Text(q.extras2[i].label).font(.system(size: 12))
+                            Spacer()
+                            Text(q.extras2[i].value).font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                        }
+                    }
+                }
+            }
         }
         if let q = store.quotas[p] {
             let rows = q.breakdown.filter { $0.1 > 0 }
