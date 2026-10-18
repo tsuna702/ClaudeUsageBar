@@ -472,90 +472,183 @@ struct SettingsView: View {
         .font(.system(size: 13, weight: .medium).monospacedDigit())
     }
 
+    @ObservedObject var nav = SettingsNav()
+
     var body: some View {
+        HStack(spacing: 0) {
+            sidebar
+            Divider()
+            detail
+        }
+        .id(lang)
+        .frame(width: 720, height: 520)
+    }
+
+    // 왼쪽 목록
+    var sidebar: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(SettingsPage.allCases, id: \.self) { page in
+                let on = nav.page == page
+                Button { nav.page = page } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: page.symbol)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 24, height: 24)
+                            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(page.color.gradient))
+                        Text(page.title).font(.system(size: 13, weight: on ? .semibold : .regular))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(on ? Color.accentColor.opacity(0.18) : .clear))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .frame(width: 200)
+        .background(Color(nsColor: .underPageBackgroundColor).opacity(0.5))
+    }
+
+    // 오른쪽: 고른 항목의 설정만
+    var detail: some View {
         Form {
-            Section(L("미리보기", "Preview")) {
-                HStack {
-                    Spacer()
-                    preview()
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(RoundedRectangle(cornerRadius: 5).fill(.quaternary))
-                    Spacer()
-                }
-                .padding(.vertical, 6)
-            }
-
-            Section(L("계정 연결", "Accounts")) {
-                ForEach(Provider.allCases, id: \.self) { p in
-                    AccountSettingRow(provider: p, store: store)
-                }
-                Text(L("각 서비스의 공식 로그인 창이 터미널에서 열려요. 로그인이 끝나면 자동으로 사용량을 불러와요.", "Each service's official login opens in Terminal. Your usage loads automatically when you finish."))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section(L("표시할 서비스", "Services")) {
-                Toggle("✳︎ Claude", isOn: $showClaude).disabled(showClaude && !showCodex)
-                Toggle("◎ Codex", isOn: $showCodex).disabled(showCodex && !showClaude)
-            }
-
-            Section(L("메뉴 막대 표시 형식", "Menu bar display")) {
-                Toggle(L("아이콘", "Icon"), isOn: $showIcon)
-                Toggle(L("아이콘을 앱 로고로 표시", "Use app logos as icons"), isOn: $useLogo).disabled(!showIcon)
-                Toggle(L("서비스 이름 (Claude, Codex)", "Service name (Claude, Codex)"), isOn: $showName)
-                Toggle(L("세션 사용량 (5시간)", "Session usage (5h)"), isOn: $showSession)
-                Toggle(L("세션 남은 사용량", "Session remaining"), isOn: $showSessionLeft)
-                Toggle(L("“남음” 글자 표시", "Show “left” label"), isOn: $showLeftLabel).disabled(!showSessionLeft)
-                Toggle(L("주간 사용량", "Weekly usage"), isOn: $showWeekly)
-                Toggle(L("5h · 7d 라벨", "5h · 7d labels"), isOn: $showLabels).disabled(!showSession && !showSessionLeft && !showWeekly)
-                Toggle(L("세션 초기화까지 남은 시간", "Time until session reset"), isOn: $showReset).disabled(!showSession && !showSessionLeft)
-                Toggle(L("숫자 대신 막대 게이지 (▰▱)", "Gauge instead of numbers (▰▱)"), isOn: $useGauge).disabled(!showSession && !showSessionLeft && !showWeekly)
-            }
-            .toggleStyle(.switch)
-
-            Section(L("경고 색상", "Warning colors")) {
-                Toggle(L("사용량이 높으면 색으로 알려주기", "Color the menu bar when usage is high"), isOn: $colorWarnings)
-                if colorWarnings {
-                    LabeledContent(L("주황색 기준", "Orange at")) {
-                        Stepper("\(Int(orangeAt))%", value: $orangeAt, in: 10...100, step: 5)
-                    }
-                    LabeledContent(L("빨간색 기준", "Red at")) {
-                        Stepper("\(Int(redAt))%", value: $redAt, in: 10...100, step: 5)
-                    }
-                }
-            }
-
-            Section(L("알림", "Notifications")) {
-                Toggle(L("사용량이 경고 기준을 넘으면 알리기", "Notify when usage crosses a warning level"), isOn: $notifyLimits)
-                Toggle(L("한도에 가까웠던 창이 초기화되면 알리기", "Notify when a nearly used-up limit resets"), isOn: $notifyReset)
-                Text(L("기준은 위 '경고 색상'의 주황색·빨간색 값을 따르고, 한도를 다 쓰면 한 번 더 알려요.", "Uses the orange and red levels from Warning colors, and notifies once more when a limit runs out."))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            Section(L("일반", "General")) {
-                Picker(L("언어", "Language"), selection: $lang) {
-                    Text(L("시스템 설정 따르기", "Follow system")).tag("system")
-                    Text("한국어").tag("ko")
-                    Text("English").tag("en")
-                }
-                Picker(L("새로고침 간격", "Refresh every"), selection: $refreshMinutes) {
-                    Text(L("1분", "1 min")).tag(1)
-                    Text(L("2분", "2 min")).tag(2)
-                    Text(L("5분", "5 min")).tag(5)
-                    Text(L("10분", "10 min")).tag(10)
-                    Text(L("30분", "30 min")).tag(30)
-                }
-                Toggle(L("로그인 시 자동 실행", "Launch at login"), isOn: Binding(get: { login.enabled }, set: { login.set($0) }))
-                if let loginError = login.error {
-                    Text(loginError).font(.caption).foregroundStyle(.red)
-                }
+            switch nav.page {
+            case .general: generalPage
+            case .accounts: accountsPage
+            case .menubar: menubarPage
+            case .alerts: alertsPage
             }
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
-        .id(lang)
-        .frame(width: 460, height: 640)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    var previewSection: some View {
+        Section(L("미리보기", "Preview")) {
+            HStack {
+                Spacer()
+                preview()
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(.quaternary))
+                Spacer()
+            }
+            .padding(.vertical, 6)
+        }
+    }
+
+    @ViewBuilder var generalPage: some View {
+        Section(L("일반", "General")) {
+            Picker(L("언어", "Language"), selection: $lang) {
+                Text(L("시스템 설정 따르기", "Follow system")).tag("system")
+                Text("한국어").tag("ko")
+                Text("English").tag("en")
+            }
+            Picker(L("새로고침 간격", "Refresh every"), selection: $refreshMinutes) {
+                Text(L("1분", "1 min")).tag(1)
+                Text(L("2분", "2 min")).tag(2)
+                Text(L("5분", "5 min")).tag(5)
+                Text(L("10분", "10 min")).tag(10)
+                Text(L("30분", "30 min")).tag(30)
+            }
+            Toggle(L("로그인 시 자동 실행", "Launch at login"), isOn: Binding(get: { login.enabled }, set: { login.set($0) }))
+            if let loginError = login.error {
+                Text(loginError).font(.caption).foregroundStyle(.red)
+            }
+        }
+    }
+
+    @ViewBuilder var accountsPage: some View {
+        Section(L("계정 연결", "Accounts")) {
+            ForEach(Provider.allCases, id: \.self) { p in
+                AccountSettingRow(provider: p, store: store)
+            }
+            Text(L("각 서비스의 공식 로그인 창이 터미널에서 열려요. 로그인이 끝나면 자동으로 사용량을 불러와요.", "Each service's official login opens in Terminal. Your usage loads automatically when you finish."))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        Section(L("표시할 서비스", "Services")) {
+            Toggle("✳︎ Claude", isOn: $showClaude).disabled(showClaude && !showCodex)
+            Toggle("◎ Codex", isOn: $showCodex).disabled(showCodex && !showClaude)
+        }
+    }
+
+    @ViewBuilder var menubarPage: some View {
+        previewSection
+        Section(L("메뉴 막대 표시 형식", "Menu bar display")) {
+            Toggle(L("아이콘", "Icon"), isOn: $showIcon)
+            Toggle(L("아이콘을 앱 로고로 표시", "Use app logos as icons"), isOn: $useLogo).disabled(!showIcon)
+            Toggle(L("서비스 이름 (Claude, Codex)", "Service name (Claude, Codex)"), isOn: $showName)
+            Toggle(L("세션 사용량 (5시간)", "Session usage (5h)"), isOn: $showSession)
+            Toggle(L("세션 남은 사용량", "Session remaining"), isOn: $showSessionLeft)
+            Toggle(L("“남음” 글자 표시", "Show “left” label"), isOn: $showLeftLabel).disabled(!showSessionLeft)
+            Toggle(L("주간 사용량", "Weekly usage"), isOn: $showWeekly)
+            Toggle(L("5h · 7d 라벨", "5h · 7d labels"), isOn: $showLabels).disabled(!showSession && !showSessionLeft && !showWeekly)
+            Toggle(L("세션 초기화까지 남은 시간", "Time until session reset"), isOn: $showReset).disabled(!showSession && !showSessionLeft)
+            Toggle(L("숫자 대신 막대 게이지 (▰▱)", "Gauge instead of numbers (▰▱)"), isOn: $useGauge).disabled(!showSession && !showSessionLeft && !showWeekly)
+        }
+    }
+
+    @ViewBuilder var alertsPage: some View {
+        previewSection
+        Section(L("경고 색상", "Warning colors")) {
+            Toggle(L("사용량이 높으면 색으로 알려주기", "Color the menu bar when usage is high"), isOn: $colorWarnings)
+            if colorWarnings {
+                LabeledContent(L("주황색 기준", "Orange at")) {
+                    Stepper("\(Int(orangeAt))%", value: $orangeAt, in: 10...100, step: 5)
+                }
+                LabeledContent(L("빨간색 기준", "Red at")) {
+                    Stepper("\(Int(redAt))%", value: $redAt, in: 10...100, step: 5)
+                }
+            }
+        }
+        Section(L("알림", "Notifications")) {
+            Toggle(L("사용량이 경고 기준을 넘으면 알리기", "Notify when usage crosses a warning level"), isOn: $notifyLimits)
+            Toggle(L("한도에 가까웠던 창이 초기화되면 알리기", "Notify when a nearly used-up limit resets"), isOn: $notifyReset)
+            Text(L("기준은 위 '경고 색상'의 주황색·빨간색 값을 따르고, 한도를 다 쓰면 한 번 더 알려요.", "Uses the orange and red levels from Warning colors, and notifies once more when a limit runs out."))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+// 설정창 왼쪽 목록 항목
+enum SettingsPage: CaseIterable {
+    case general, accounts, menubar, alerts
+
+    var title: String {
+        switch self {
+        case .general: return L("일반", "General")
+        case .accounts: return L("계정", "Accounts")
+        case .menubar: return L("메뉴 막대", "Menu Bar")
+        case .alerts: return L("경고와 알림", "Alerts")
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .general: return "gearshape.fill"
+        case .accounts: return "person.crop.circle.fill"
+        case .menubar: return "menubar.rectangle"
+        case .alerts: return "bell.badge.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .general: return .gray
+        case .accounts: return .blue
+        case .menubar: return .purple
+        case .alerts: return .red
+        }
+    }
+}
+
+// 설정창에서 고른 항목 (@State 대신)
+final class SettingsNav: ObservableObject {
+    @Published var page: SettingsPage = .general
 }
 
 // MARK: - 앱
