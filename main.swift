@@ -300,6 +300,7 @@ enum Pref {
     static let showLabels = "bar_labels"
     static let showReset = "bar_reset"
     static let useGauge = "bar_gauge"
+    static let spacing = "bar_spacing"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -307,7 +308,7 @@ enum Pref {
             Provider.claude.enabledKey: true, Provider.codex.enabledKey: true,
             Notify.enabledKey: true, Notify.resetKey: true,
             showIcon: true, useLogo: true, showName: false, showSession: true, showSessionLeft: false, showLeftLabel: true, showWeekly: true,
-            showLabels: false, showReset: false, useGauge: false,
+            showLabels: false, showReset: false, useGauge: false, spacing: 10.0,
         ])
     }
 
@@ -455,23 +456,6 @@ struct SettingsView: View {
 
     func color(_ level: Int) -> Color { [Color.primary, .orange, .red][level] }
 
-    func preview() -> some View {
-        // 토글 값이 바뀔 때마다 다시 그려지도록 읽어둠
-        _ = (showIcon, useLogo, showName, showSession, showSessionLeft, showLeftLabel, showWeekly, showLabels, showReset, useGauge, showClaude, showCodex)
-        let segs = Format.segments(store.quotas, sampleIfMissing: true)
-        return HStack(spacing: 10) {
-            ForEach(segs.indices, id: \.self) { i in
-                HStack(spacing: 4) {
-                    if segs[i].2.showsLogo, let img = segs[i].2.logo {
-                        Image(nsImage: img).resizable().frame(width: 16, height: 16)
-                    }
-                    if !segs[i].0.isEmpty { Text(segs[i].0).foregroundStyle(color(segs[i].1)) }
-                }
-            }
-        }
-        .font(.system(size: 13, weight: .medium).monospacedDigit())
-    }
-
     @ObservedObject var nav = SettingsNav()
 
     var body: some View {
@@ -513,25 +497,30 @@ struct SettingsView: View {
     }
 
     // 오른쪽: 고른 항목의 설정만
-    var detail: some View {
-        Form {
-            switch nav.page {
-            case .general: generalPage
-            case .accounts: accountsPage
-            case .menubar: menubarPage
-            case .alerts: alertsPage
+    @ViewBuilder var detail: some View {
+        if nav.page == .menubar {
+            MenubarCatalogView(store: store)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            Form {
+                switch nav.page {
+                case .general: generalPage
+                case .accounts: accountsPage
+                case .alerts: alertsPage
+                case .menubar: EmptyView()
+                }
             }
+            .formStyle(.grouped)
+            .toggleStyle(.switch)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .formStyle(.grouped)
-        .toggleStyle(.switch)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     var previewSection: some View {
         Section(L("미리보기", "Preview")) {
             HStack {
                 Spacer()
-                preview()
+                BarPreview(store: store)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(RoundedRectangle(cornerRadius: 5).fill(.quaternary))
@@ -573,22 +562,6 @@ struct SettingsView: View {
         Section(L("표시할 서비스", "Services")) {
             Toggle("✳︎ Claude", isOn: $showClaude).disabled(showClaude && !showCodex)
             Toggle("◎ Codex", isOn: $showCodex).disabled(showCodex && !showClaude)
-        }
-    }
-
-    @ViewBuilder var menubarPage: some View {
-        previewSection
-        Section(L("메뉴 막대 표시 형식", "Menu bar display")) {
-            Toggle(L("아이콘", "Icon"), isOn: $showIcon)
-            Toggle(L("아이콘을 앱 로고로 표시", "Use app logos as icons"), isOn: $useLogo).disabled(!showIcon)
-            Toggle(L("서비스 이름 (Claude, Codex)", "Service name (Claude, Codex)"), isOn: $showName)
-            Toggle(L("세션 사용량 (5시간)", "Session usage (5h)"), isOn: $showSession)
-            Toggle(L("세션 남은 사용량", "Session remaining"), isOn: $showSessionLeft)
-            Toggle(L("“남음” 글자 표시", "Show “left” label"), isOn: $showLeftLabel).disabled(!showSessionLeft)
-            Toggle(L("주간 사용량", "Weekly usage"), isOn: $showWeekly)
-            Toggle(L("5h · 7d 라벨", "5h · 7d labels"), isOn: $showLabels).disabled(!showSession && !showSessionLeft && !showWeekly)
-            Toggle(L("세션 초기화까지 남은 시간", "Time until session reset"), isOn: $showReset).disabled(!showSession && !showSessionLeft)
-            Toggle(L("숫자 대신 막대 게이지 (▰▱)", "Gauge instead of numbers (▰▱)"), isOn: $useGauge).disabled(!showSession && !showSessionLeft && !showWeekly)
         }
     }
 
@@ -821,6 +794,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        let cat = ImageRenderer(content: MenubarCatalogView(store: store, flat: true).frame(width: 520)
+            .background(Color(nsColor: .windowBackgroundColor)))
+        cat.scale = 2
+        if let img = cat.nsImage, let tiff = img.tiffRepresentation,
+           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: dir + "/catalog.png"))
+        }
         print("snapshot saved"); fflush(stdout)
     }
 
@@ -835,7 +815,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         let title = NSMutableAttributedString()
         for (i, seg) in segs.enumerated() {
-            if i > 0 { title.append(NSAttributedString(string: "   ", attributes: [.font: font])) }
+            if i > 0 {
+                // 서비스 사이 간격 (설정 값, pt)
+                let gap = UserDefaults.standard.double(forKey: Pref.spacing)
+                title.append(NSAttributedString(string: " ", attributes: [.font: font, .kern: max(0, gap - 4)]))
+            }
             if seg.2.showsLogo, let img = seg.2.logo {
                 let a = NSTextAttachment()
                 a.image = img
