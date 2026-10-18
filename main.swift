@@ -812,6 +812,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var rightMenu = NSMenu()
     var pending = 0
     var enabledSet = Set<Provider>()
+    var lastRefreshStart = Date.distantPast
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Pref.registerDefaults()
@@ -839,7 +840,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in self?.checkUpdate() }
         // 개발용: 실행하자마자 대시보드를 열어 위치 확인
         if ProcessInfo.processInfo.environment["USAGE_OPEN"] != nil, let b = statusItem.button {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            // 값이 숫자면 그만큼(초) 기다렸다가 엶
+            let delay = Double(ProcessInfo.processInfo.environment["USAGE_OPEN"] ?? "") ?? 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 self.statusClicked(b)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                     let pw = self.popover.contentViewController?.view.window
@@ -894,6 +897,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // 왼쪽 클릭: 대시보드, 오른쪽 클릭: 간단 메뉴
     @objc func statusClicked(_ sender: NSStatusBarButton) {
+        // 아이콘을 누를 때마다 새로고침 (10초 안에 다시 누르면 건너뜀)
+        if Date().timeIntervalSince(lastRefreshStart) > 10, !popover.isShown { refresh() }
         if NSApp.currentEvent?.type == .rightMouseUp {
             statusItem.menu = rightMenu
             sender.performClick(nil)
@@ -916,6 +921,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func refresh() {
         guard pending == 0 else { return }
+        lastRefreshStart = Date()
         let targets = Provider.allCases.filter(Pref.enabled)
         enabledSet = Set(targets)
         pending = targets.count + 1
