@@ -14,8 +14,9 @@ enum StatusLine {
     static func line(_ quotas: [Provider: Quota]) -> String {
         Provider.allCases.filter(Pref.enabled).compactMap { p -> String? in
             guard let q = quotas[p] else { return nil }
+            // 상태줄에는 그림이 없으므로 링 값도 글자로 씀
             var t = Format.title(q, p)
-            if Pref.on(Pref.showIcon), p.showsLogo || p.showsRing { t = p.icon + " " + t }
+            if Pref.on(Pref.showIcon), p.showsLogo { t = p.icon + " " + t }
             return t
         }.joined(separator: "  ")
     }

@@ -78,23 +78,27 @@ struct BarPreview: View {
     @AppStorage(Pref.useGauge) var useGauge = false
     @AppStorage(Pref.spacing) var spacing = 10.0
     @AppStorage(Pref.colorWarnings) var colorWarnings = true
+    @AppStorage(Pref.ringNumber) var ringNumber = true
     @ObservedObject var watcher = PrefsWatcher.shared   // 서비스 켜고 끄기 등 나머지 설정
 
     var body: some View {
         // 위 값들이 바뀔 때마다 다시 그려지도록 읽어둠
         _ = (showIcon, useLogo, useRing, showName, showSession, showSessionLeft, showLeftLabel, showWeekly,
-             showLabels, showReset, useGauge, colorWarnings, watcher.tick)
+             showLabels, showReset, useGauge, colorWarnings, ringNumber, watcher.tick)
         let segs = Format.segments(store.quotas, sampleIfMissing: true)
         return HStack(spacing: spacing) {
             ForEach(segs.indices, id: \.self) { i in
                 HStack(spacing: 4) {
-                    if segs[i].2.showsRing {
-                        Image(nsImage: Ring.image(store.quotas[segs[i].2] ?? .sample, size: size + 2))
-                    } else if segs[i].2.showsLogo, let img = segs[i].2.logo {
+                    if segs[i].2.showsLogo, let img = segs[i].2.logo {
                         Image(nsImage: img).resizable().frame(width: size + 3, height: size + 3)
                     }
-                    if !segs[i].0.isEmpty {
-                        Text(segs[i].0).foregroundStyle([Color.primary, .orange, .red][segs[i].1])
+                    ForEach(segs[i].0.indices, id: \.self) { j in
+                        switch segs[i].0[j] {
+                        case .ring(let v):
+                            Image(nsImage: Ring.image(v, level: segs[i].1, size: size + 6))
+                        case .text(let t):
+                            Text(t).foregroundStyle([Color.primary, .orange, .red][segs[i].1]).lineLimit(1).fixedSize()
+                        }
                     }
                 }
             }
@@ -117,6 +121,7 @@ struct MenubarCatalogView: View {
     @AppStorage(Pref.showLabels) var showLabels = false
     @AppStorage(Pref.showReset) var showReset = false
     @AppStorage(Pref.useGauge) var useGauge = false
+    @AppStorage(Pref.ringNumber) var ringNumber = true
     @AppStorage(Pref.spacing) var spacing = 10.0
 
     var anyValue: Bool { showSession || showSessionLeft || showWeekly }
@@ -140,28 +145,41 @@ struct MenubarCatalogView: View {
                 header(L("항목 카탈로그", "Menu Bar Items Catalog"), "book")
                 panel {
                     VStack(alignment: .leading, spacing: 18) {
-                        group(L("아이콘 스타일", "Icon Style"), note: L("하나만 선택", "Choose one")) {
+                        group(L("아이콘", "Icon"), note: L("하나만 선택", "Choose one")) {
                             CatalogChip(title: L("숨기기", "Don't Show"), symbol: "eye.slash", on: !showIcon) {
                                 showIcon = false
                             }
-                            CatalogChip(title: L("기호 (✳︎ ◎)", "Symbols (✳︎ ◎)"), symbol: "asterisk", on: showIcon && !useLogo && !useRing) {
-                                showIcon = true; useLogo = false; useRing = false
+                            CatalogChip(title: L("기호 (✳︎ ◎)", "Symbols (✳︎ ◎)"), symbol: "asterisk", on: showIcon && !useLogo) {
+                                showIcon = true; useLogo = false
                             }
-                            CatalogChip(title: L("앱 로고", "App Logos"), symbol: nil, image: Provider.claude.logo, on: showIcon && useLogo && !useRing) {
-                                showIcon = true; useLogo = true; useRing = false
-                            }
-                            CatalogChip(title: L("링 게이지", "Ring Gauge"), symbol: "circle.dashed", on: showIcon && useRing) {
-                                showIcon = true; useRing = true
+                            CatalogChip(title: L("앱 로고", "App Logos"), symbol: nil, image: Provider.claude.logo, on: showIcon && useLogo) {
+                                showIcon = true; useLogo = true
                             }
                         }
                         group(L("서비스", "Services"), note: L("하나 이상", "At least one")) {
                             ForEach(Provider.allCases, id: \.self) { p in ServiceChip(provider: p) }
                         }
-                        group(L("세션 (5시간)", "Session (5h)"), note: nil) {
-                            CatalogChip(title: L("사용량", "Used"), symbol: "bolt.fill", on: showSession) { showSession.toggle() }
-                            CatalogChip(title: L("남은 사용량", "Remaining"), symbol: "battery.75percent", on: showSessionLeft) { showSessionLeft.toggle() }
-                            CatalogChip(title: L("“남음” 글자", "“left” Label"), symbol: "textformat", on: showLeftLabel,
-                                        disabled: !showSessionLeft) { showLeftLabel.toggle() }
+                        group(L("값 표시 방식", "Value Style"), note: L("하나만 선택", "Choose one")) {
+                            CatalogChip(title: L("숫자 (45%)", "Number (45%)"), symbol: "percent", on: !useRing && !useGauge,
+                                        disabled: !anyValue) { useRing = false; useGauge = false }
+                            CatalogChip(title: L("막대 (▰▱)", "Bar (▰▱)"), symbol: "chart.bar.fill", on: !useRing && useGauge,
+                                        disabled: !anyValue) { useRing = false; useGauge = true }
+                            CatalogChip(title: L("링 게이지", "Ring Gauge"), symbol: "circle.dashed", on: useRing,
+                                        disabled: !anyValue) { useRing = true; useGauge = false; pickOneSessionValue() }
+                            CatalogChip(title: L("링 안에 숫자", "Number in Ring"), symbol: "number.circle", on: ringNumber,
+                                        disabled: !useRing || !anyValue) { ringNumber.toggle() }
+                        }
+                        group(L("세션 (5시간)", "Session (5h)"), note: useRing ? L("링은 하나만", "One ring") : nil) {
+                            CatalogChip(title: L("사용량", "Used"), symbol: "bolt.fill", on: showSession) {
+                                showSession.toggle()
+                                if useRing, showSession { showSessionLeft = false }
+                            }
+                            CatalogChip(title: L("남은 사용량", "Remaining"), symbol: "battery.75percent", on: showSessionLeft) {
+                                showSessionLeft.toggle()
+                                if useRing, showSessionLeft { showSession = false }
+                            }
+                            CatalogChip(title: L("“남음” 글자", "“left” Label"), symbol: "textformat", on: showLeftLabel && !useRing,
+                                        disabled: !showSessionLeft || useRing) { showLeftLabel.toggle() }
                             CatalogChip(title: L("초기화까지 남은 시간", "Time to Reset"), symbol: "clock", on: showReset,
                                         disabled: !showSession && !showSessionLeft) { showReset.toggle() }
                         }
@@ -172,8 +190,6 @@ struct MenubarCatalogView: View {
                             CatalogChip(title: L("서비스 이름", "Service Name"), symbol: "character.textbox", on: showName) { showName.toggle() }
                             CatalogChip(title: L("5h · 7d 라벨", "5h · 7d Labels"), symbol: "tag", on: showLabels,
                                         disabled: !anyValue) { showLabels.toggle() }
-                            CatalogChip(title: L("막대 게이지 (▰▱)", "Gauge (▰▱)"), symbol: "chart.bar.fill", on: useGauge,
-                                        disabled: !anyValue) { useGauge.toggle() }
                         }
                         Divider()
                         HStack {
@@ -235,10 +251,15 @@ struct MenubarCatalogView: View {
     func resetDefaults() {
         let d = UserDefaults.standard
         for k in [Pref.showIcon, Pref.useLogo, Pref.useRing, Pref.showName, Pref.showSession, Pref.showSessionLeft, Pref.showLeftLabel,
-                  Pref.showWeekly, Pref.showLabels, Pref.showReset, Pref.useGauge, Pref.spacing]
+                  Pref.showWeekly, Pref.showLabels, Pref.showReset, Pref.useGauge, Pref.ringNumber, Pref.spacing]
                   + Provider.allCases.map(\.enabledKey) {
             d.removeObject(forKey: k)
         }
+    }
+
+    // 링은 세션 값을 하나만 그리므로, 둘 다 켜져 있으면 남은 사용량만 남김
+    func pickOneSessionValue() {
+        if showSession && showSessionLeft { showSession = false }
     }
 
     // 값 표시는 모두 끄고 아이콘만 남김

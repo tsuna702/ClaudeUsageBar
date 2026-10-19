@@ -155,8 +155,7 @@ enum Provider: String, CaseIterable {
         Provider.logoCache[self] = img
         return img
     }
-    var showsRing: Bool { Pref.on(Pref.showIcon) && Pref.on(Pref.useRing) }
-    var showsLogo: Bool { Pref.on(Pref.showIcon) && !Pref.on(Pref.useRing) && Pref.on(Pref.useLogo) && logo != nil }
+    var showsLogo: Bool { Pref.on(Pref.showIcon) && Pref.on(Pref.useLogo) && logo != nil }
 }
 
 // 시스템 아이콘(여러 해상도가 섞인 이미지)을 일반 비트맵으로 바꿈
@@ -439,6 +438,7 @@ enum Pref {
     static let showIcon = "bar_icon"
     static let useLogo = "bar_logo"
     static let useRing = "bar_ring"
+    static let ringNumber = "bar_ring_number"
     static let showName = "bar_name"
     static let showSession = "bar_session"
     static let showSessionLeft = "bar_session_left"
@@ -459,7 +459,7 @@ enum Pref {
             Hotkey.key: "optcmdU",
             Notify.quietKey: false, Notify.quietStartKey: 22, Notify.quietEndKey: 8,
             showIcon: true, useLogo: true, useRing: false, showName: false, showSession: true, showSessionLeft: false, showLeftLabel: true, showWeekly: true,
-            showLabels: false, showReset: false, useGauge: false, spacing: 10.0,
+            showLabels: false, showReset: false, useGauge: false, spacing: 10.0, ringNumber: true,
         ])
     }
 
@@ -492,40 +492,84 @@ enum Format {
         b.map { Bucket(percent: max(0, 100 - $0.percent), resetsAt: $0.resetsAt) }
     }
 
-    // 켜진 요소만 모아 한 서비스의 문구를 만듦
-    static func title(_ q: Quota, _ p: Provider) -> String {
-        let labels = Pref.on(Pref.showLabels), gaugeOn = Pref.on(Pref.useGauge)
-        func value(_ b: Bucket?) -> String { gaugeOn ? gauge(b) : pct(b) }
+    // 메뉴 막대 한 서비스의 조각: 글자 또는 링 (링은 그 값을 고리와 숫자로 그림)
+    enum Part { case text(String), ring(Double) }
 
-        var head: [String] = []
-        if Pref.on(Pref.showIcon), !p.showsLogo, !p.showsRing { head.append(p.icon) }
-        if Pref.on(Pref.showName) { head.append(p.name) }
+    // 켜진 요소만 모아 한 서비스의 조각을 만듦
+    // ringDrawn: 링을 그림으로 그릴 수 있는 곳(메뉴 막대)인지. 아니면 링 값도 글자로
+    static func parts(_ q: Quota, _ p: Provider, ringDrawn: Bool = true) -> [Part] {
+        let labels = Pref.on(Pref.showLabels), ringOn = Pref.on(Pref.useRing)
+        let ring = ringDrawn && ringOn
+        let gaugeOn = !ringOn && Pref.on(Pref.useGauge)
+        func text(_ b: Bucket?) -> String { gaugeOn ? gauge(b) : pct(b) }
+        func value(_ b: Bucket?) -> Part {
+            if ring, let b { return .ring(b.percent) }
+            return .text(text(b))
+        }
 
-        var values: [String] = []
+        var head: [Part] = []
+        if Pref.on(Pref.showIcon), !p.showsLogo { head.append(.text(p.icon)) }
+        if Pref.on(Pref.showName) { head.append(.text(p.name)) }
+
         // 한도 %가 없는 서비스(예: OpenAI API 월 비용)는 대표 문구를 보여줌
         if q.session == nil, q.weekly == nil {
-            let parts = head + (q.headline.map { [$0] } ?? [])
-            return parts.isEmpty ? p.icon : parts.joined(separator: " ")
+            let parts = head + (q.headline.map { [.text($0)] } ?? [])
+            return parts.isEmpty ? [.text(p.icon)] : parts
         }
+        var values: [[Part]] = []
         let used = Pref.on(Pref.showSession), left = Pref.on(Pref.showSessionLeft)
-        if (used || left), q.session != nil {
-            var pieces: [String] = []
-            if used { pieces.append(value(q.session)) }
-            let leftLabel = Pref.on(Pref.showLeftLabel)
-            if left { pieces.append(leftLabel ? L("남음 \(value(remaining(q.session)))", "\(value(remaining(q.session))) left") : value(remaining(q.session))) }
-            // '남음' 글자가 없으면 사용/남은 값을 '/'로 구분
-            var s = (labels ? (q.session?.short ?? "5h") + " " : "") + pieces.joined(separator: leftLabel ? " " : "/")
-            if Pref.on(Pref.showReset) { s += " (\(shortReset(q.session)))" }
-            values.append(s)
+        if (used || left), let sb = q.session {
+            var g: [Part] = labels ? [.text(sb.short ?? "5h")] : []
+            if ringOn {
+                // 링은 사용량과 남은 사용량 중 하나만 (둘 다 켜져 있으면 남은 쪽)
+                g.append(value(left ? remaining(sb) : sb))
+            } else {
+                var pieces: [String] = []
+                if used { pieces.append(text(sb)) }
+                let leftLabel = Pref.on(Pref.showLeftLabel)
+                if left { pieces.append(leftLabel ? L("남음 \(text(remaining(sb)))", "\(text(remaining(sb))) left") : text(remaining(sb))) }
+                // '남음' 글자가 없으면 사용/남은 값을 '/'로 구분
+                g.append(.text(pieces.joined(separator: leftLabel ? " " : "/")))
+            }
+            if Pref.on(Pref.showReset) { g.append(.text("(\(shortReset(sb)))")) }
+            values.append(g)
         }
-        if Pref.on(Pref.showWeekly), q.weekly != nil { values.append((labels ? (q.weekly?.short ?? "7d") + " " : "") + value(q.weekly)) }
+        if Pref.on(Pref.showWeekly), let wb = q.weekly {
+            values.append((labels ? [.text(wb.short ?? "7d")] : []) + [value(wb)])
+        }
         // 켜 둔 항목이 이 서비스에 없으면 있는 값 하나라도 보여줌
         if values.isEmpty, used || left || Pref.on(Pref.showWeekly), let b = q.session ?? q.weekly {
-            values.append((labels ? (b.short ?? "") + " " : "") + value(b))
+            let shown = (ringOn && left && !used) ? remaining(b) : b
+            values.append((labels ? [.text(b.short ?? "")] : []) + [value(shown)])
         }
 
-        let parts = head + (values.isEmpty ? [] : [values.joined(separator: " · ")])
-        return parts.isEmpty ? p.icon : parts.joined(separator: " ")
+        // 글자 사이는 " · ", 링끼리는 띄어쓰기만
+        var body: [Part] = []
+        for (i, g) in values.enumerated() {
+            if i > 0, !ring { body.append(.text("·")) }
+            body += g
+        }
+        let parts = head + body
+        if parts.isEmpty { return p.showsLogo ? [] : [.text(p.icon)] }
+        return parts
+    }
+
+    // 조각을 글자 한 줄로 (상태줄, 디버그 출력)
+    static func title(_ q: Quota, _ p: Provider) -> String {
+        parts(q, p, ringDrawn: false).compactMap { if case .text(let t) = $0 { return t } else { return nil } }.joined(separator: " ")
+    }
+
+    // 붙어 있는 글자 조각은 하나로 합침 (그릴 때 링과 글자만 번갈아 나오게)
+    static func merged(_ parts: [Part]) -> [Part] {
+        var out: [Part] = []
+        for p in parts {
+            if case .text(let t) = p, case .text(let prev)? = out.last {
+                out[out.count - 1] = .text(prev + " " + t)
+            } else {
+                out.append(p)
+            }
+        }
+        return out
     }
 
     static func resetText(_ b: Bucket) -> String {
@@ -554,10 +598,10 @@ enum Format {
     }
 
     // 메뉴 막대 전체 문구 (서비스별로 색을 따로 입힘)
-    static func segments(_ quotas: [Provider: Quota], sampleIfMissing: Bool) -> [(String, Int, Provider)] {
+    static func segments(_ quotas: [Provider: Quota], sampleIfMissing: Bool) -> [([Part], Int, Provider)] {
         Provider.allCases.filter(Pref.enabled).compactMap { p in
             guard let q = quotas[p] ?? (sampleIfMissing ? .sample : nil) else { return nil }
-            return (title(q, p), level(q), p)
+            return (merged(parts(q, p)), level(q), p)
         }
     }
 }
@@ -1139,29 +1183,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         let title = NSMutableAttributedString()
+        let space = NSAttributedString(string: " ", attributes: [.font: font])
         for (i, seg) in segs.enumerated() {
             if i > 0 {
                 // 서비스 사이 간격 (설정 값, pt)
                 let gap = UserDefaults.standard.double(forKey: Pref.spacing)
                 title.append(NSAttributedString(string: " ", attributes: [.font: font, .kern: max(0, gap - 4)]))
             }
-            if seg.2.showsRing, let q = store.quotas[seg.2] {
-                let a = NSTextAttachment()
-                a.image = Ring.image(q, size: 15)
-                a.bounds = NSRect(x: 0, y: -3, width: 15, height: 15)
-                title.append(NSAttributedString(attachment: a))
-                if !seg.0.isEmpty { title.append(NSAttributedString(string: " ", attributes: [.font: font])) }
-            } else if seg.2.showsLogo, let img = seg.2.logo {
+            var first = true
+            if seg.2.showsLogo, let img = seg.2.logo {
                 let a = NSTextAttachment()
                 a.image = img
                 a.bounds = NSRect(x: 0, y: -3, width: 16, height: 16)
                 title.append(NSAttributedString(attachment: a))
-                if !seg.0.isEmpty { title.append(NSAttributedString(string: " ", attributes: [.font: font])) }
+                first = false
             }
-            title.append(NSAttributedString(string: seg.0, attributes: [
-                .foregroundColor: [NSColor.labelColor, .systemOrange, .systemRed][seg.1],
-                .font: font,
-            ]))
+            for part in seg.0 {
+                if !first { title.append(space) }
+                first = false
+                switch part {
+                case .ring(let v):
+                    let a = NSTextAttachment()
+                    a.image = Ring.image(v, level: seg.1, size: 18)
+                    a.bounds = NSRect(x: 0, y: -4, width: 18, height: 18)
+                    title.append(NSAttributedString(attachment: a))
+                case .text(let t):
+                    title.append(NSAttributedString(string: t, attributes: [
+                        .foregroundColor: [NSColor.labelColor, .systemOrange, .systemRed][seg.1],
+                        .font: font,
+                    ]))
+                }
+            }
         }
         statusItem.button?.attributedTitle = title
     }
