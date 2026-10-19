@@ -34,5 +34,9 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </dict>
 </plist>
 EOF
-codesign --force --sign - "$APP"
-echo "Built $APP ($VERSION)"
+# 이 맥에 "UsageBar Local" 인증서가 있으면 그것으로 서명 (빌드가 바뀌어도 같은 앱으로 인식돼
+# 키체인이 다시 묻지 않음). 없으면(GitHub 빌드 등) 임시 서명
+SIGN="-"
+if security find-identity -p codesigning 2>/dev/null | grep -q '"UsageBar Local"'; then SIGN="UsageBar Local"; fi
+codesign --force --sign "$SIGN" "$APP"
+echo "Built $APP ($VERSION, signed: $SIGN)"

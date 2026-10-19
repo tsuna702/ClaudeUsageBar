@@ -58,7 +58,7 @@ enum Notify {
                         : L("\(p.name) \(label) 사용량 \(used)%", "\(p.name) \(label) usage at \(used)%")
                     send(title, L("남은 양 \(Int(left.rounded()))% · \(Fmt.until(b.resetsAt))", "\(Int(left.rounded()))% left · resets \(Fmt.until(b.resetsAt))"))
                 }
-                d.set("\(reset)|\(max(level, prevLevel))", forKey: key)
+                save("\(reset)|\(max(level, prevLevel))", key)
             } else {
                 // 새 창으로 바뀜: 이전 창에서 주의 이상이었으면 초기화 알림
                 if prevLevel > 0, d.bool(forKey: resetKey) {
@@ -66,8 +66,14 @@ enum Notify {
                     send(L("\(p.name) \(label) 한도가 초기화됐어요", "\(p.name) \(label) limit has reset"),
                          L("지금 \(now)% 남아 있어요", "\(now)% available now"))
                 }
-                d.set("\(reset)|\(level)", forKey: key)
+                save("\(reset)|\(level)", key)
             }
         }
+    }
+
+    // 값이 바뀔 때만 저장 (설정이 바뀌었다는 알림이 매번 퍼지지 않게)
+    static func save(_ value: String, _ key: String) {
+        let d = UserDefaults.standard
+        if d.string(forKey: key) != value { d.set(value, forKey: key) }
     }
 }

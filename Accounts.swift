@@ -40,7 +40,7 @@ enum AccountStore {
     static func currentBlob(_ p: Provider) -> Data? {
         switch p {
         case .claude:
-            guard let cred = ClaudeAPI.readCredentials() else { return nil }
+            guard let cred = ClaudeAPI.credentials() else { return nil }
             var blob: [String: Any] = ["credentials": cred]
             if let data = FileManager.default.contents(atPath: claudeConfigPath),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -86,7 +86,18 @@ enum AccountStore {
         SecItemDelete(query(p, email) as CFDictionary)
     }
 
-    // 현재 계정을 저장 (내용이 바뀌었을 때만 키체인에 씀)
+    // 새로고침마다 키체인을 읽고 쓰지 않도록, 이미 저장된 계정은 10분에 한 번만 확인
+    static var lastSave: [String: Date] = [:]
+
+    static func saveIfNeeded(_ p: Provider, email: String) {
+        lock.lock(); defer { lock.unlock() }
+        let k = keychainAccount(p, email)
+        let known = list(p).contains { $0.email == email }
+        if known, let t = lastSave[k], Date().timeIntervalSince(t) < 600 { return }
+        if saveCurrent(p, email: email) { lastSave[k] = Date() }
+    }
+
+    // 현재 계정을 저장 (내용이 바뀌었을 때만 키체인과 목록에 씀)
     @discardableResult
     static func saveCurrent(_ p: Provider, email: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -96,9 +107,12 @@ enum AccountStore {
             return false
         }
         if debug { print("saveCurrent", p.rawValue, "blob", blob.count, "same", readSaved(p, email) == blob); fflush(stdout) }
-        if readSaved(p, email) != blob {
+        let changed = readSaved(p, email) != blob
+        if changed {
             guard writeSaved(p, email, blob) else { return false }
         }
+        // 목록에 이미 있고 내용도 그대로면 목록은 건드리지 않음
+        if !changed, all.contains(where: { $0.provider == p.rawValue && $0.email == email }) { return true }
         var list = all.filter { !($0.provider == p.rawValue && $0.email == email) }
         list.append(SavedAccount(provider: p.rawValue, email: email, savedAt: Date().timeIntervalSince1970))
         setAll(list.sorted { $0.email < $1.email })

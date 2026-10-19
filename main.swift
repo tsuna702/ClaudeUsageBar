@@ -237,6 +237,36 @@ enum ClaudeAPI {
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
+    // 로그인 정보는 메모리에 두고 씀. 키체인은 처음, 토큰 만료가 가까울 때, 거절당했을 때만 읽음
+    // (Claude Code가 토큰을 갱신하며 항목을 다시 만들면 '항상 허용'이 풀려 매번 암호를 물을 수 있음)
+    static var cache: [String: Any]?
+    static var cacheStamp = ""
+    static let cacheLock = NSLock()
+
+    // 항목 속성(수정 시각 포함)은 암호 없이 읽을 수 있음. 바뀌었으면(다른 계정으로 로그인 등) 다시 읽음
+    static func stamp() -> String {
+        let (code, data) = security(["find-generic-password", "-s", service])
+        return code == 0 ? String(decoding: data, as: UTF8.self) : ""
+    }
+
+    static func credentials(fresh: Bool = false) -> [String: Any]? {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        let st = stamp()
+        guard !st.isEmpty else { cache = nil; return nil }   // 로그아웃됨
+        if !fresh, let c = cache, st == cacheStamp { return c }
+        cache = readCredentials()
+        cacheStamp = st
+        return cache
+    }
+
+    static func forget() {
+        cacheLock.lock(); cache = nil; cacheLock.unlock()
+    }
+
+    static func expiresAt(_ json: [String: Any]?) -> Double {
+        ((json?["claudeAiOauth"] as? [String: Any])?["expiresAt"] as? Double ?? 0) / 1000
+    }
+
     // Claude Code가 쓰는 것과 같은 키체인 항목에 덮어씀 (비밀값은 argv 대신 stdin으로 전달)
     static func writeCredentials(_ json: [String: Any]) -> Bool {
         let (_, attrs) = security(["find-generic-password", "-s", service])
@@ -247,15 +277,25 @@ enum ClaudeAPI {
         guard let data = try? JSONSerialization.data(withJSONObject: json) else { return false }
         let hex = data.map { String(format: "%02x", $0) }.joined()
         let cmd = "add-generic-password -U -a \"\(account)\" -s \"\(service)\" -X \(hex)\n"
-        return security(["-i"], stdin: cmd).0 == 0
+        let ok = security(["-i"], stdin: cmd).0 == 0
+        if ok { cacheLock.lock(); cache = json; cacheStamp = stamp(); cacheLock.unlock() }
+        return ok
     }
 
     // 만료(또는 5분 이내 만료 예정)면 refresh token으로 새 토큰을 받아 키체인에 저장
     static func refreshIfNeeded(force: Bool = false) -> String? {
         refreshLock.lock(); defer { refreshLock.unlock() }
-        guard var json = readCredentials(), var oauth = json["claudeAiOauth"] as? [String: Any] else { return nil }
-        let expiresAt = (oauth["expiresAt"] as? Double ?? 0) / 1000
-        if !force, expiresAt > Date().timeIntervalSince1970 + 300 { return oauth["accessToken"] as? String }
+        let soon = Date().timeIntervalSince1970 + 300
+        var current = credentials()
+        // 만료가 가깝거나 거절당했으면, Claude Code가 이미 새 토큰을 받아 뒀을 수 있으니 키체인을 다시 읽음
+        if force || expiresAt(current) <= soon {
+            let before = (current?["claudeAiOauth"] as? [String: Any])?["accessToken"] as? String
+            current = credentials(fresh: true)
+            let after = (current?["claudeAiOauth"] as? [String: Any])?["accessToken"] as? String
+            if let after, after != before, expiresAt(current) > soon { return after }
+        }
+        guard var json = current, var oauth = json["claudeAiOauth"] as? [String: Any] else { return nil }
+        if !force, expiresAt(json) > soon { return oauth["accessToken"] as? String }
         guard let refreshToken = oauth["refreshToken"] as? String else { return oauth["accessToken"] as? String }
 
         var req = URLRequest(url: URL(string: "https://platform.claude.com/v1/oauth/token")!)
@@ -303,7 +343,7 @@ enum ClaudeAPI {
     }
 
     static func fetch(retry: Bool, _ done: @escaping (Quota?, String?) -> Void) {
-        guard readCredentials() != nil else { done(nil, L("Claude Code 로그인 정보를 찾을 수 없어요", "Claude Code login not found")); return }
+        guard credentials() != nil else { done(nil, L("Claude Code 로그인 정보를 찾을 수 없어요", "Claude Code login not found")); return }
         guard let token = refreshIfNeeded() else { done(nil, L("토큰 갱신 실패 — 터미널에서 claude를 한 번 실행해 주세요", "Token refresh failed — run claude in Terminal once")); return }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -329,7 +369,7 @@ enum ClaudeAPI {
             if let b = bucket(u.seven_day_opus) { q.extras.append((L("주간 Opus", "Weekly Opus"), b)) }
             if let b = bucket(u.seven_day_sonnet) { q.extras.append((L("주간 Sonnet", "Weekly Sonnet"), b)) }
             q.breakdown = (u.seven_day_breakdown?.rows ?? []).map { ($0.display_name, $0.percent) }
-            let oauth = readCredentials()?["claudeAiOauth"] as? [String: Any]
+            let oauth = credentials()?["claudeAiOauth"] as? [String: Any]
             q.plan = oauth?["subscriptionType"] as? String
             q.email = accountEmail()
             if let x = u.extra_usage {
@@ -953,12 +993,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 설정창에서 값이 바뀌면 바로 반영
         // 로그인/계정 전환이 끝나면 바로 새로고침
         NotificationCenter.default.addObserver(forName: .usageLoginChanged, object: nil, queue: .main) { [weak self] _ in
+            ClaudeAPI.forget()
             self?.refresh()
         }
         NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.updateTitle()
-            self?.rebuildMenu()
-            self?.scheduleTimer()
+            self?.scheduleRedraw()
             self?.settingsWindow?.title = L("사용량 설정", "UsageBar Settings")
             Hotkey.apply()
             // 새로 켠 서비스가 있으면 바로 불러옴
@@ -966,6 +1005,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let newly = Set(Provider.allCases.filter(Pref.enabled)).subtracting(self.enabledSet)
                 if !newly.isEmpty { self.refresh(only: Array(newly)) }
             }
+        }
+    }
+
+    // 여러 변경이 한꺼번에 와도 메뉴 막대와 메뉴는 한 번만 다시 그림
+    var redrawPending = false
+    func scheduleRedraw() {
+        guard !redrawPending else { return }
+        redrawPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.redrawPending = false
+            self.updateTitle()
+            self.rebuildMenu()
         }
     }
 
@@ -1070,7 +1122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             scanning = true
             DispatchQueue.global(qos: .utility).async {
             let t0 = Date()
-            let c = LocalScan.claude(), x = LocalScan.codex()
+            let (c, x) = LocalScan.scanAll()
             if ProcessInfo.processInfo.environment["USAGE_DEBUG"] != nil {
                 print("scan", String(format: "%.1fs", -t0.timeIntervalSinceNow))
             }
@@ -1106,21 +1158,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             // 로그인된 계정을 자동으로 저장해 두어 나중에 전환할 수 있게 함
                             if p.supportsSavedAccounts, let email = q.email {
                                 DispatchQueue.global(qos: .utility).async {
-                                    AccountStore.saveCurrent(p, email: email)
+                                    AccountStore.saveIfNeeded(p, email: email)
                                     DispatchQueue.main.async { self.store.savedAccounts = AccountStore.all }
                                 }
                             }
                         }
                         self.store.loggedIn[p] = loggedIn
-                        if !loggedIn { self.store.quotas[p] = nil }   // 로그아웃하면 이전 값을 지움
+                        if !loggedIn {   // 로그아웃하면 이전 값을 지움
+                            self.store.quotas[p] = nil
+                            if p == .claude { ClaudeAPI.forget() }
+                        }
                         self.store.errors[p] = err
                         // 429면 5분 동안 이 서비스는 다시 요청하지 않음
                         if err == Net.rateLimitMessage { self.lastFetch[p] = Date().addingTimeInterval(300 - self.interval(p)) }
                         if ProcessInfo.processInfo.environment["USAGE_DEBUG"] != nil {
                             print(p.name, q.map { "session \(Format.pct($0.session)) weekly \(Format.pct($0.weekly)) bar=[\(Format.title($0, p))]" } ?? "-", err ?? ""); fflush(stdout)
                         }
-                        self.updateTitle()
-                        self.rebuildMenu()
+                        self.scheduleRedraw()
                         self.inFlight.remove(p)
                         self.updateLoading()
                     }

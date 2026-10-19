@@ -26,11 +26,22 @@ struct LocalStats {
     var projects: [String: [String: Agg]] = [:]        // 프로젝트 → 날짜 → 합계
     var hasCost = false
 
-    static let hourFormatter: DateFormatter = {
+    // 날짜 키는 양력 숫자로 고정 (기록을 읽을 때 만드는 키와 화면에서 찾는 키가 같아야 함)
+    static func formatter(_ format: String) -> DateFormatter {
         let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd HH"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = format
         return f
-    }()
+    }
+
+    // 기록마다 부르므로 DateFormatter 대신 직접 만듦 (현지 시각)
+    static func hourKey(_ d: Date) -> String {
+        var t = time_t(d.timeIntervalSince1970.rounded(.down))
+        var tm = tm()
+        localtime_r(&t, &tm)
+        return String(format: "%04d-%02d-%02d %02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour)
+    }
 
     // 오늘 0시~23시 시간대별
     var todayHours: [(hour: Int, stat: DayStat)] {
@@ -49,11 +60,7 @@ struct LocalStats {
         return rows.filter { $0.1.tokens > 0 }.sorted { $0.1.tokens > $1.1.tokens }.prefix(limit).map { ($0.0, $0.1) }
     }
 
-    static let keyFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
+    static let keyFormatter = formatter("yyyy-MM-dd")
 
     static func key(_ d: Date) -> String { keyFormatter.string(from: d) }
 
@@ -92,6 +99,13 @@ struct LocalStats {
 struct UsageEntry {
     let id: String        // 중복 제거용 (비어 있으면 항상 집계)
     let date: Date
+    // 날짜 키는 읽을 때 한 번만 만듦 (합칠 때마다 날짜를 글자로 바꾸면 느림)
+    let hourKey: String   // "yyyy-MM-dd HH"
+    var dayKey: String { String(hourKey.prefix(10)) }
+    init(id: String, date: Date) {
+        self.id = id; self.date = date
+        hourKey = LocalStats.hourKey(date)
+    }
     var tokens = 0.0, cost = 0.0, saved = 0.0, cacheRead = 0.0, inputAll = 0.0
     var model = ""
     var project = ""
@@ -100,6 +114,10 @@ struct UsageEntry {
 struct FileScan {
     var entries: [UsageEntry] = []
     var times: [Date] = []
+    var offset = 0          // 여기까지(마지막 줄바꿈 다음) 읽었음. 파일이 늘어나면 이어서 읽음
+    // Codex는 앞 줄의 상태를 이어 받아야 함
+    var lastTotal = 0.0
+    var model = "", project = ""
 }
 
 enum LocalScan {
@@ -109,9 +127,49 @@ enum LocalScan {
         return f
     }()
 
+    static let isoPlain = ISO8601DateFormatter()
+
+    // JSON에서 꺼낸 글자는 원래 줄 전체를 붙잡고 있을 수 있어서, 따로 복사해 둠
+    // (같은 이름이 수만 번 나오므로 한 벌만 보관)
+    static var owned: [String: String] = [:]
+    static func own(_ s: String) -> String {
+        if let o = owned[s] { return o }
+        let copy = String(decoding: Array(s.utf8), as: UTF8.self)
+        owned[copy] = copy
+        return copy
+    }
+
     static func date(_ s: Any?) -> Date? {
         guard let s = s as? String else { return nil }
-        return iso.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+        return fastISO(s) ?? iso.date(from: s) ?? isoPlain.date(from: s)
+    }
+
+    // 로그 시각 형식(2026-10-11T07:08:54.324Z)은 직접 계산 (날짜 변환기는 기록 수만 건에 느림)
+    static func fastISO(_ s: String) -> Date? {
+        var u = Array(s.utf8)
+        guard u.count >= 20, u[4] == 45, u[7] == 45, u[10] == 84, u[13] == 58, u[16] == 58, u.last == 90 else { return nil }
+        u.removeLast()
+        func num(_ a: Int, _ n: Int) -> Int? {
+            var v = 0
+            for i in a..<(a + n) { let c = Int(u[i]) - 48; guard (0...9).contains(c) else { return nil }; v = v * 10 + c }
+            return v
+        }
+        guard let y = num(0, 4), let mo = num(5, 2), let d = num(8, 2),
+              let h = num(11, 2), let mi = num(14, 2), let sec = num(17, 2), (1...12).contains(mo) else { return nil }
+        var frac = 0.0
+        if u.count > 19 {
+            guard u[19] == 46, u.count > 20 else { return nil }
+            var scale = 0.1
+            for c in u[20...] { let v = Int(c) - 48; guard (0...9).contains(v) else { return nil }; frac += Double(v) * scale; scale /= 10 }
+        }
+        // 그레고리력 날짜 → 1970-01-01부터 며칠
+        let yy = mo <= 2 ? y - 1 : y
+        let era = (yy >= 0 ? yy : yy - 399) / 400
+        let yoe = yy - era * 400
+        let doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+        let days = era * 146097 + doe - 719468
+        return Date(timeIntervalSince1970: Double(days * 86400 + h * 3600 + mi * 60 + sec) + frac)
     }
 
     // 최근 31일 안에 바뀐 .jsonl 파일
@@ -130,21 +188,111 @@ enum LocalScan {
         return out
     }
 
-    // 파일별 읽기 결과 캐시: 수정 시각과 크기가 같으면 다시 읽지 않음 (백그라운드 한 곳에서만 호출)
+    // 파일별 읽기 결과 캐시 (백그라운드 한 곳에서만 호출)
+    // - 수정 시각과 크기가 같으면 다시 읽지 않음
+    // - 로그는 끝에 덧붙여지기만 하므로, 커졌으면 새로 붙은 부분만 읽음 (진행 중인 세션 파일은 수십 MB)
     static var cache: [String: (mtime: Date, size: Int, scan: FileScan)] = [:]
+    static var touched = Set<String>()
 
-    static func cached(_ url: URL, _ read: (URL) -> FileScan) -> FileScan {
+    // 두 서비스를 한 번에 집계하고, 더 이상 대상이 아닌 파일(31일 지남·삭제)은 캐시에서 뺌
+    static func scanAll() -> (claude: LocalStats, codex: LocalStats) {
+        touched = []
+        let c = claude(), x = codex()
+        cache = cache.filter { touched.contains($0.key) }
+        return (c, x)
+    }
+
+    static func cached(_ url: URL, _ read: (FileScan, [Line]) -> FileScan) -> FileScan {
         let v = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         let m = v?.contentModificationDate ?? .distantPast, size = v?.fileSize ?? 0
-        if let c = cache[url.path], c.mtime == m, c.size == size { return c.scan }
-        let s = read(url)
+        touched.insert(url.path)
+        let old = cache[url.path]
+        if let c = old, c.mtime == m, c.size == size { return c.scan }
+        // 줄어들었으면(다시 쓰인 파일) 처음부터
+        let base = old.flatMap { $0.size <= size ? $0.scan : nil } ?? FileScan()
+        guard let h = try? FileHandle(forReadingFrom: url) else { return base }
+        defer { try? h.close() }
+        guard (try? h.seek(toOffset: UInt64(base.offset))) != nil else { return base }
+        // 큰 파일을 한 번에 올리면 메모리가 크게 늘어 4MB씩 나눠 읽음
+        // (줄 중간에서 끊긴 부분은 다음 조각에 붙여 읽고, 쓰는 중인 마지막 줄은 다음 새로고침에 읽음)
+        var s = base
+        var carry = Data()
+        // 조각마다 임시 객체를 바로 풀어 줌 (안 그러면 집계가 끝날 때까지 쌓임)
+        while autoreleasepool(invoking: { () -> Bool in
+            guard let chunk = try? h.read(upToCount: 4 << 20), !chunk.isEmpty else { return false }
+            var buf = carry
+            buf.append(chunk)
+            let (lines, used) = split(buf)
+            s = read(s, lines)
+            s.offset += used
+            carry = used < buf.count ? buf.subdata(in: used..<buf.count) : Data()
+            return true
+        }) {}
         cache[url.path] = (m, size, s)
         return s
     }
 
-    static func lines(_ url: URL) -> [Substring] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        return String(decoding: data, as: UTF8.self).split(separator: "\n")
+    // 마지막 줄바꿈까지의 줄들과, 그만큼의 바이트 수
+    static func split(_ data: Data) -> ([Line], Int) {
+        var lines: [Line] = []
+        var used = 0
+        data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
+            guard let base = buf.baseAddress else { return }
+            var start = 0
+            while start < buf.count, let nl = memchr(base + start, 0x0A, buf.count - start) {
+                let end = base.distance(to: UnsafeRawPointer(nl))
+                if end > start { lines.append(Line(data: data, range: start..<end)) }
+                start = end + 1
+                used = start
+            }
+        }
+        return (lines, used)
+    }
+
+    // 로그 한 줄 (파일 내용을 복사하지 않고 위치만 가리킴)
+    // 줄 대부분은 도구 출력 같은 큰 내용이라, 필요한 줄만 JSON으로 풀고 나머지는 기록 시각만 찾아 읽음
+    struct Line {
+        let data: Data
+        let range: Range<Int>
+
+        func bytes<T>(_ f: (UnsafeRawBufferPointer) -> T) -> T {
+            data.withUnsafeBytes { f(UnsafeRawBufferPointer(rebasing: $0[range])) }
+        }
+
+        // 글자 위치 (last: 마지막 것, within: 앞쪽 몇 바이트에서만 찾기)
+        func find(_ needle: StaticString, last: Bool = false, within: Int = .max) -> Int? {
+            bytes { b -> Int? in
+                guard let base = b.baseAddress else { return nil }
+                let count = min(b.count, within)
+                var from = 0, found: Int? = nil
+                while from < count, let hit = memmem(base + from, count - from, needle.utf8Start, needle.utf8CodeUnitCount) {
+                    let at = base.distance(to: UnsafeRawPointer(hit))
+                    if !last { return at }
+                    found = at
+                    from = at + 1
+                }
+                return found
+            }
+        }
+
+        func has(_ needle: StaticString, within: Int = .max) -> Bool { find(needle, within: within) != nil }
+
+        // "timestamp":"…" 값을 JSON을 풀지 않고 읽음 (문자열 안의 따옴표는 \" 로 적혀 있어 걸리지 않음)
+        func timestamp(last: Bool) -> Date? {
+            let key: StaticString = "\"timestamp\":\""
+            guard let at = find(key, last: last) else { return nil }
+            return bytes { b -> Date? in
+                let start = at + key.utf8CodeUnitCount
+                guard start < b.count, let base = b.baseAddress,
+                      let q = memchr(base + start, 0x22, min(40, b.count - start)) else { return nil }
+                let end = base.distance(to: UnsafeRawPointer(q))
+                return LocalScan.date(String(decoding: UnsafeRawBufferPointer(rebasing: b[start..<end]), as: UTF8.self))
+            }
+        }
+
+        var json: [String: Any]? {
+            try? JSONSerialization.jsonObject(with: data.subdata(in: range)) as? [String: Any]
+        }
     }
 
     // 여러 파일 결과를 합침: 같은 ID는 한 번만, 작업 시간은 전체 기록 시각을 이어 붙여 계산
@@ -157,11 +305,11 @@ enum LocalScan {
         for s in scans {
             for e in s.entries {
                 if !e.id.isEmpty { guard seen.insert(e.id).inserted else { continue } }
-                stats.add(e.date) {
-                    $0.tokens += e.tokens; $0.cost += e.cost; $0.saved += e.saved
-                    $0.cacheRead += e.cacheRead; $0.inputAll += e.inputAll
-                }
-                let hk = LocalStats.hourFormatter.string(from: e.date), dk = LocalStats.key(e.date)
+                let hk = e.hourKey, dk = e.dayKey
+                var d = stats.days[dk] ?? DayStat()
+                d.tokens += e.tokens; d.cost += e.cost; d.saved += e.saved
+                d.cacheRead += e.cacheRead; d.inputAll += e.inputAll
+                stats.days[dk] = d
                 var h = stats.hours[hk] ?? DayStat()
                 h.tokens += e.tokens; h.cost += e.cost
                 stats.hours[hk] = h
@@ -207,11 +355,15 @@ enum LocalScan {
         ("claude-3-5-haiku", 0.80, 4, 0.08),
     ]
 
-    static func readClaude(_ url: URL) -> FileScan {
-        var scan = FileScan()
-        for line in lines(url) {
-            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  let ts = date(obj["timestamp"]) else { continue }
+    static func readClaude(_ base: FileScan, _ lines: [Line]) -> FileScan {
+        var scan = base
+        for line in lines {
+            // 사용량이 적힌 응답 줄이 아니면 시각만 (최상위 timestamp는 줄 끝 쪽에 있음)
+            guard line.has("\"usage\""), line.has("\"assistant\"") else {
+                if let ts = line.timestamp(last: true) { scan.times.append(ts) }
+                continue
+            }
+            guard let obj = line.json, let ts = date(obj["timestamp"]) else { continue }
             scan.times.append(ts)
             guard obj["type"] as? String == "assistant",
                   let msg = obj["message"] as? [String: Any],
@@ -236,8 +388,8 @@ enum LocalScan {
             e.saved = read * (p.input - p.read) / 1_000_000
             e.cacheRead = read
             e.inputAll = input + write + read
-            e.model = model
-            e.project = (obj["cwd"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+            e.model = own(model)
+            e.project = own((obj["cwd"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? "")
             scan.entries.append(e)
         }
         return scan
@@ -250,13 +402,19 @@ enum LocalScan {
 
     // MARK: Codex
 
-    static func readCodex(_ url: URL) -> FileScan {
-        var scan = FileScan()
-        var lastTotal = 0.0
-        var model = "", project = ""
-        for line in lines(url) {
-            guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  let ts = date(obj["timestamp"]) else { continue }
+    static func readCodex(_ base: FileScan, _ lines: [Line]) -> FileScan {
+        var scan = base
+        var lastTotal = base.lastTotal
+        var model = base.model, project = base.project
+        for line in lines {
+            // 사용량·세션 정보·턴 정보 줄이 아니면 시각만 (Codex는 timestamp가 줄 맨 앞)
+            // 종류는 줄 앞부분에 적혀 있으므로 앞 200바이트만 봄 (뒤쪽은 큰 출력이 대부분)
+            guard line.has("\"token_count\"", within: 200) || line.has("\"session_meta\"", within: 200)
+                    || line.has("\"turn_context\"", within: 200) else {
+                if let ts = line.timestamp(last: false) { scan.times.append(ts) }
+                continue
+            }
+            guard let obj = line.json, let ts = date(obj["timestamp"]) else { continue }
             scan.times.append(ts)
             // 세션 정보·턴 정보에서 현재 모델과 작업 폴더를 기억
             if let t = obj["type"] as? String, t == "session_meta" || t == "turn_context",
@@ -280,10 +438,12 @@ enum LocalScan {
             e.tokens = input + output
             e.cacheRead = n("cached_input_tokens")
             e.inputAll = input
-            e.model = model
-            e.project = project
+            e.model = own(model)
+            e.project = own(project)
             scan.entries.append(e)
         }
+        // 다음에 이어 읽을 때 쓸 상태
+        scan.lastTotal = lastTotal; scan.model = model; scan.project = project
         return scan
     }
 

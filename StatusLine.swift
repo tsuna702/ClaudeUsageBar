@@ -21,10 +21,13 @@ enum StatusLine {
         }.joined(separator: "  ")
     }
 
+    static var lastWritten = ""
+
+    // 내용이 바뀔 때만 파일에 씀
     static func write(_ quotas: [Provider: Quota]) {
         let text = line(quotas)
-        guard !text.isEmpty else { return }
-        try? (text + "\n").write(to: fileURL, atomically: true, encoding: .utf8)
+        guard !text.isEmpty, text != lastWritten else { return }
+        if (try? (text + "\n").write(to: fileURL, atomically: true, encoding: .utf8)) != nil { lastWritten = text }
     }
 
     static func readSettings() -> [String: Any] {
