@@ -89,7 +89,7 @@ enum LoginHelper {
     // 로그인 정보가 있는지 (토큰 값은 읽지 않고 존재만 확인)
     static func isLoggedIn(_ p: Provider) -> Bool {
         switch p {
-        case .claude: return ClaudeAPI.security(["find-generic-password", "-s", ClaudeAPI.service]).0 == 0
+        case .claude: return ClaudeAPI.hasLogin()
         case .codex: return CodexAPI.credentials() != nil
         case .gemini: return FileManager.default.fileExists(atPath: GeminiAPI.credsPath)
         case .antigravity: return p.appURL != nil      // 로그인 여부는 앱이 실행 중일 때 확인

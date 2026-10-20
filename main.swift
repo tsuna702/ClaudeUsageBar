@@ -244,9 +244,20 @@ enum ClaudeAPI {
     static let cacheLock = NSLock()
 
     // 항목 속성(수정 시각 포함)은 암호 없이 읽을 수 있음. 바뀌었으면(다른 계정으로 로그인 등) 다시 읽음
+    static var lastStamp: (at: Date, value: String)?
+
     static func stamp() -> String {
         let (code, data) = security(["find-generic-password", "-s", service])
-        return code == 0 ? String(decoding: data, as: UTF8.self) : ""
+        let v = code == 0 ? String(decoding: data, as: UTF8.self) : ""
+        lastStamp = (Date(), v)
+        return v
+    }
+
+    // 로그인돼 있는지: 방금(10초 안) 확인한 결과가 있으면 그것을 씀 (security를 또 실행하지 않게)
+    static func hasLogin() -> Bool {
+        cacheLock.lock(); let recent = lastStamp; cacheLock.unlock()
+        if let recent, Date().timeIntervalSince(recent.at) < 10 { return !recent.value.isEmpty }
+        return security(["find-generic-password", "-s", service]).0 == 0
     }
 
     static func credentials(fresh: Bool = false) -> [String: Any]? {
@@ -962,15 +973,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         popover.behavior = .transient
         popover.animates = true
-        let host = NSHostingController(rootView: DashboardView(
-            store: store, ui: ui,
-            onRefresh: { [weak self] in self?.refresh() },
-            onSettings: { [weak self] in self?.popover.performClose(nil); self?.openSettings() },
-            onQuit: { NSApp.terminate(nil) }))
-        // 크기는 직접 정함 (SwiftUI가 열린 뒤 크기를 바꾸면 팝오버 위치가 틀어짐)
-        host.sizingOptions = []
-        popover.contentViewController = host
-        rebuildMenu()
+        // 대시보드는 미리 한 번 만들어 둠 (열 때마다 새로 만들면 여는 데 0.25초쯤 걸림)
+        popover.contentViewController = makeDashboard()
         refresh()
         scheduleTimer()
         // 업데이트 확인: 실행할 때 + 하루에 한 번
@@ -1008,7 +1012,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // 여러 변경이 한꺼번에 와도 메뉴 막대와 메뉴는 한 번만 다시 그림
+    // 여러 변경이 한꺼번에 와도 메뉴 막대는 한 번만 다시 그림
     var redrawPending = false
     func scheduleRedraw() {
         guard !redrawPending else { return }
@@ -1017,7 +1021,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.redrawPending = false
             self.updateTitle()
-            self.rebuildMenu()
         }
     }
 
@@ -1054,6 +1057,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refresh(only: Provider.allCases.filter { now.timeIntervalSince(lastFetch[$0] ?? .distantPast) > 60 })
         }
         if NSApp.currentEvent?.type == .rightMouseUp {
+            rebuildMenu()   // 메뉴는 열 때만 만듦
             statusItem.menu = rightMenu
             sender.performClick(nil)
             statusItem.menu = nil
@@ -1071,6 +1075,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             popover.contentViewController?.view.window?.makeKey()
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    func makeDashboard() -> NSViewController {
+        let host = NSHostingController(rootView: DashboardView(
+            store: store, ui: ui,
+            onRefresh: { [weak self] in self?.refresh() },
+            onSettings: { [weak self] in self?.popover.performClose(nil); self?.openSettings() },
+            onQuit: { NSApp.terminate(nil) }))
+        // 크기는 직접 정함 (SwiftUI가 열린 뒤 크기를 바꾸면 팝오버 위치가 틀어짐)
+        host.sizingOptions = []
+        return host
     }
 
     // 서비스별 새로고침 간격(분). 0이면 전체 설정을 따름
@@ -1228,9 +1243,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: 화면
 
+    var lastTitleKey = ""
+
     func updateTitle() {
         StatusLine.write(store.quotas)
         let segs = Format.segments(store.quotas, sampleIfMissing: false)
+        // 보일 내용이 그대로면 다시 그리지 않음 (메뉴 막대 버튼을 다시 배치하는 비용이 큼)
+        let key = segs.map { "\($0.2.rawValue)|\($0.1)|\($0.2.showsLogo)|\($0.0)" }.joined(separator: "‖")
+            + "‖\(UserDefaults.standard.double(forKey: Pref.spacing))|\(Pref.on(Pref.ringNumber))|\(store.errors.isEmpty)"
+        guard key != lastTitleKey else { return }
+        lastTitleKey = key
         guard !segs.isEmpty else {
             statusItem.button?.title = store.errors.isEmpty ? "✳︎ …" : "✳︎ ⚠︎"
             return
@@ -1350,6 +1372,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.isReleasedWhenClosed = false
             w.center()
             settingsWindow = w
+            // 닫으면 창을 버림 (닫힌 설정 화면이 값이 바뀔 때마다 다시 그려지지 않게)
+            var token: NSObjectProtocol?
+            token = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self, weak w] _ in
+                if let token { NotificationCenter.default.removeObserver(token) }
+                DispatchQueue.main.async { if let self, self.settingsWindow === w { self.settingsWindow = nil } }
+            }
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)

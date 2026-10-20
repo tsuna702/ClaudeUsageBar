@@ -193,6 +193,20 @@ enum LocalScan {
     // - 로그는 끝에 덧붙여지기만 하므로, 커졌으면 새로 붙은 부분만 읽음 (진행 중인 세션 파일은 수십 MB)
     static var cache: [String: (mtime: Date, size: Int, scan: FileScan)] = [:]
     static var touched = Set<String>()
+    static var changed = false   // 이번 집계에서 새로 읽은 내용이 있는지
+
+    // 새로 읽은 내용도, 빠진 파일도 없으면 지난 결과를 그대로 씀 (합치는 데 드는 계산을 건너뜀)
+    static var last: [String: (paths: [String], stats: LocalStats)] = [:]
+
+    static func combineIfChanged(_ name: String, _ urls: [URL], _ read: (FileScan, [Line]) -> FileScan, hasCost: Bool) -> LocalStats {
+        changed = false
+        let scans = urls.map { cached($0, read) }
+        let paths = urls.map(\.path).sorted()
+        if !changed, let l = last[name], l.paths == paths { return l.stats }
+        let stats = combine(scans, hasCost: hasCost)
+        last[name] = (paths, stats)
+        return stats
+    }
 
     // 두 서비스를 한 번에 집계하고, 더 이상 대상이 아닌 파일(31일 지남·삭제)은 캐시에서 뺌
     static func scanAll() -> (claude: LocalStats, codex: LocalStats) {
@@ -209,6 +223,7 @@ enum LocalScan {
         let old = cache[url.path]
         if let c = old, c.mtime == m, c.size == size { return c.scan }
         // 줄어들었으면(다시 쓰인 파일) 처음부터
+        changed = true
         let base = old.flatMap { $0.size <= size ? $0.scan : nil } ?? FileScan()
         guard let h = try? FileHandle(forReadingFrom: url) else { return base }
         defer { try? h.close() }
@@ -301,7 +316,7 @@ enum LocalScan {
         var stats = LocalStats()
         stats.hasCost = hasCost
         var seen = Set<String>()
-        var times = Set<Date>()
+        var times: [Double] = []
         for s in scans {
             for e in s.entries {
                 if !e.id.isEmpty { guard seen.insert(e.id).inserted else { continue } }
@@ -324,13 +339,13 @@ enum LocalScan {
                     stats.projects[e.project, default: [:]][dk] = a
                 }
             }
-            times.formUnion(s.times)
+            times.append(contentsOf: s.times.map(\.timeIntervalSince1970))
         }
-        // 5분 이내 간격만 이어서 작업 시간으로 계산 (동시에 돌린 세션은 한 번만 셈)
-        let sorted = times.sorted()
-        for (a, b) in zip(sorted, sorted.dropFirst()) {
-            let gap = b.timeIntervalSince(a)
-            if gap > 0, gap <= 300 { stats.add(b) { $0.seconds += gap } }
+        // 5분 이내 간격만 이어서 작업 시간으로 계산 (동시에 돌린 세션은 한 번만 셈, 같은 시각은 간격 0이라 건너뜀)
+        times.sort()
+        for (a, b) in zip(times, times.dropFirst()) {
+            let gap = b - a
+            if gap > 0, gap <= 300 { stats.add(Date(timeIntervalSince1970: b)) { $0.seconds += gap } }
         }
         return stats
     }
@@ -397,7 +412,7 @@ enum LocalScan {
 
     static func claude() -> LocalStats {
         let root = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] ?? (NSHomeDirectory() + "/.claude")
-        return combine(recentFiles(in: [root + "/projects"]).map { cached($0, readClaude) }, hasCost: true)
+        return combineIfChanged("claude", recentFiles(in: [root + "/projects"]), readClaude, hasCost: true)
     }
 
     // MARK: Codex
@@ -449,6 +464,6 @@ enum LocalScan {
 
     static func codex() -> LocalStats {
         let home = ProcessInfo.processInfo.environment["CODEX_HOME"] ?? (NSHomeDirectory() + "/.codex")
-        return combine(recentFiles(in: [home + "/sessions", home + "/archived_sessions"]).map { cached($0, readCodex) }, hasCost: false)
+        return combineIfChanged("codex", recentFiles(in: [home + "/sessions", home + "/archived_sessions"]), readCodex, hasCost: false)
     }
 }
