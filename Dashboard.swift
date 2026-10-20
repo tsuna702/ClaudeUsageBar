@@ -583,10 +583,31 @@ struct DashboardView: View {
     var providers: [Provider] { Provider.allCases.filter(Pref.enabled) }
 
     // 전체 상태: 활성 서비스 중 가장 나쁜 단계
-    var overall: Int {
-        providers.compactMap { store.quotas[$0] }.map { q in
-            q.limitReached ? 2 : Theme.level(max(q.session?.percent ?? 0, q.weekly?.percent ?? 0))
-        }.max() ?? 0
+    // 가장 급한 한도 하나: 단계(0 정상, 1 주의, 2 임박, 3 소진)와 무엇인지
+    var worst: (score: Int, text: String, more: Int) {
+        var items: [(Int, String)] = []
+        for p in providers {
+            guard let q = store.quotas[p] else { continue }
+            for (name, b) in [(q.session?.label ?? L("세션", "session"), q.session), (q.weekly?.label ?? L("주간", "weekly"), q.weekly)] {
+                guard let b else { continue }
+                let score = b.percent >= 100 ? 3 : Theme.level(b.percent)
+                if score > 0 { items.append((score, "\(p.name) \(name)")) }
+            }
+            // 퍼센트 없이 한도 도달만 알려주는 서비스
+            if q.limitReached, !items.contains(where: { $0.1.hasPrefix(p.name) && $0.0 == 3 }) { items.append((3, p.name)) }
+        }
+        guard let top = items.max(by: { $0.0 < $1.0 }) else { return (0, "", 0) }
+        return (top.0, top.1, items.filter { $0.0 == top.0 }.count - 1)
+    }
+
+    var overall: Int { min(2, worst.score) }
+
+    var badgeText: String {
+        let w = worst
+        guard w.score > 0 else { return L("정상", "Healthy") }
+        let state = [L("주의", "watch"), L("한도 임박", "near limit"), L("소진", "used up")][w.score - 1]
+        let more = w.more > 0 ? L(" 외 \(w.more)", " +\(w.more)") : ""
+        return "\(w.text)\(more) \(state)"
     }
 
     var body: some View {
@@ -623,7 +644,7 @@ struct DashboardView: View {
             HStack(spacing: 6) {
                 Circle().fill(Theme.levelColor(overall)).frame(width: 9, height: 9)
                     .overlay(Circle().stroke(Theme.levelColor(overall).opacity(0.3), lineWidth: 4))
-                Text([L("정상", "Healthy"), L("주의", "Watch"), L("한도 임박", "Near limit")][overall]).font(.system(size: 12, weight: .semibold))
+                Text(badgeText).font(.system(size: 12, weight: .semibold)).lineLimit(1)
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(Capsule().fill(Color(nsColor: .textBackgroundColor).opacity(0.8)))
