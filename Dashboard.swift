@@ -186,6 +186,7 @@ struct LimitCard: View {
     let window: Double          // 창 길이(초)
     let limitReached: Bool
     var recentRate: Double? = nil   // 기록으로 구한 최근 속도 (%/초)
+    var showForecast = DashItem.forecast.on
 
     // 소진 예상: 최근 45분 기록이 있으면 그 속도로, 없으면 창이 시작된 뒤 평균 속도로 계산
     func forecast(used: Double) -> (text: String, ok: Bool)? {
@@ -227,7 +228,7 @@ struct LimitCard: View {
                     Text(L("남음", "left")).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
                 }
                 ProgressBar(fraction: left / 100, marker: timeLeft)
-                if let eta = forecast(used: used) {
+                if showForecast, let eta = forecast(used: used) {
                     HStack(spacing: 4) {
                         Image(systemName: eta.ok ? "checkmark.circle.fill" : "flame.fill").font(.system(size: 9))
                         Text(eta.text).lineLimit(1).minimumScaleFactor(0.7)
@@ -579,6 +580,7 @@ struct DashboardView: View {
     let onQuit: () -> Void
     var flat = false   // 스냅샷용: 스크롤 없이 전체를 그림
     @AppStorage(Lang.key) var lang = "system"   // 바뀌면 전체를 다시 그림
+    @ObservedObject var watcher = PrefsWatcher.shared   // 보일 항목 설정이 바뀌면 다시 그림
 
     var providers: [Provider] { Provider.allCases.filter(Pref.enabled) }
 
@@ -691,6 +693,25 @@ struct DashboardView: View {
     }
 
     @ViewBuilder var content: some View {
+        let _ = watcher.tick
+        if DashItem.outage.on { outageBanners }
+        if DashItem.update.on { updateBanner }
+        if let p = ui.tab.provider, Pref.enabled(p) {
+            detail(p)
+        } else {
+            ForEach(providers, id: \.self) { p in
+                if store.loggedIn[p] == false {
+                    LoginCard(provider: p)
+                } else {
+                    if DashItem.account.on { AccountRow(provider: p, store: store, ui: ui) }
+                    limits(p)
+                }
+            }
+            if DashItem.today.on { summary }
+        }
+    }
+
+    @ViewBuilder var outageBanners: some View {
         ForEach(outages, id: \.0) { p, st in
             Button { NSWorkspace.shared.open(st.url) } label: {
                 HStack(spacing: 8) {
@@ -707,6 +728,9 @@ struct DashboardView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    @ViewBuilder var updateBanner: some View {
         if let u = store.update {
             Button { NSWorkspace.shared.open(u.url) } label: {
                 HStack(spacing: 8) {
@@ -720,19 +744,6 @@ struct DashboardView: View {
             }
             .buttonStyle(.plain)
         }
-        if let p = ui.tab.provider, Pref.enabled(p) {
-            detail(p)
-        } else {
-            ForEach(providers, id: \.self) { p in
-                if store.loggedIn[p] == false {
-                    LoginCard(provider: p)
-                } else {
-                    AccountRow(provider: p, store: store, ui: ui)
-                    limits(p)
-                }
-            }
-            summary
-        }
     }
 
     @ViewBuilder func limits(_ p: Provider) -> some View {
@@ -743,15 +754,17 @@ struct DashboardView: View {
                 StatCard(title: L("이번 달", "This month"), symbol: "dollarsign.circle.fill", color: .green,
                          value: h, unit: L("사용 금액", "Spent"), sub: nil, fraction: nil, delta: nil)
             }
-        } else {
+        } else if DashItem.session.on || DashItem.weekly.on {
+            // 계정 줄을 숨겼으면 어느 서비스 카드인지 제목에 이름을 붙임
+            let prefix = DashItem.account.on || ui.tab.provider != nil ? "" : p.name + " "
             HStack(spacing: 10) {
-                if q?.session != nil || q == nil {
-                    LimitCard(title: q?.session?.label ?? L("세션", "Session"), symbol: "bolt.fill", bucket: q?.session,
+                if DashItem.session.on, q?.session != nil || q == nil {
+                    LimitCard(title: prefix + (q?.session?.label ?? L("세션", "Session")), symbol: "bolt.fill", bucket: q?.session,
                               window: q?.session?.window ?? 5 * 3600, limitReached: q?.limitReached ?? false,
                               recentRate: History.recentRate(p, .session, current: q?.session))
                 }
-                if q?.weekly != nil || q == nil {
-                    LimitCard(title: q?.weekly?.label ?? L("주간", "Weekly"), symbol: "calendar", bucket: q?.weekly,
+                if DashItem.weekly.on, q?.weekly != nil || q == nil {
+                    LimitCard(title: prefix + (q?.weekly?.label ?? L("주간", "Weekly")), symbol: "calendar", bucket: q?.weekly,
                               window: q?.weekly?.window ?? 7 * 86400, limitReached: q?.limitReached ?? false,
                               recentRate: History.recentRate(p, .weekly, current: q?.weekly))
                 }
@@ -793,9 +806,9 @@ struct DashboardView: View {
     }
 
     @ViewBuilder func detailBody(_ p: Provider) -> some View {
-        AccountRow(provider: p, store: store, ui: ui)
+        if DashItem.account.on { AccountRow(provider: p, store: store, ui: ui) }
         limits(p)
-        if let q = store.quotas[p], !q.extras.isEmpty {
+        if DashItem.extraLimits.on, let q = store.quotas[p], !q.extras.isEmpty {
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                 ForEach(q.extras.indices, id: \.self) { i in
                     LimitCard(title: q.extras[i].0, symbol: "calendar.badge.clock", bucket: q.extras[i].1,
@@ -803,11 +816,12 @@ struct DashboardView: View {
                 }
             }
         }
-        if let q = store.quotas[p] {
+        if DashItem.trend.on, let q = store.quotas[p] {
             TrendChart(provider: p, quota: q, ui: ui)
         }
         if let s = store.local[p] {
             let today = s.day(offset: 0), yday = s.day(offset: 1)
+            if DashItem.costTokens.on {
             HStack(spacing: 10) {
                 if s.hasCost {
                     StatCard(title: L("오늘 비용", "Cost today"), symbol: "dollarsign.circle.fill", color: .yellow,
@@ -822,17 +836,20 @@ struct DashboardView: View {
                          fraction: today.cacheRatio,
                          delta: compare(today.tokens, yday.tokens, Fmt.tokens))
             }
-            if p.hasLocalLogs {
-                StatCard(title: L("오늘 작업 시간", "Working time today"), symbol: "clock.fill", color: .purple,
-                         value: Fmt.duration(today.seconds), unit: L("작업 시간", "Duration"), sub: nil,
-                         fraction: min(1, today.seconds / (8 * 3600)),
-                         delta: compare(today.seconds, yday.seconds, Fmt.duration))
-                HourlyChart(provider: p, stats: s, ui: ui)
             }
-            DailyChart(provider: p, stats: s, ui: ui)
-            RankCard(provider: p, stats: s, ui: ui)
+            if p.hasLocalLogs {
+                if DashItem.workTime.on {
+                    StatCard(title: L("오늘 작업 시간", "Working time today"), symbol: "clock.fill", color: .purple,
+                             value: Fmt.duration(today.seconds), unit: L("작업 시간", "Duration"), sub: nil,
+                             fraction: min(1, today.seconds / (8 * 3600)),
+                             delta: compare(today.seconds, yday.seconds, Fmt.duration))
+                }
+                if DashItem.hourly.on { HourlyChart(provider: p, stats: s, ui: ui) }
+            }
+            if DashItem.daily.on { DailyChart(provider: p, stats: s, ui: ui) }
+            if DashItem.rank.on { RankCard(provider: p, stats: s, ui: ui) }
         }
-        if let q = store.quotas[p], !q.extras2.isEmpty {
+        if DashItem.credits.on, let q = store.quotas[p], !q.extras2.isEmpty {
             Card {
                 VStack(alignment: .leading, spacing: 8) {
                     CardTitle(symbol: p.hasLocalLogs ? "creditcard.fill" : "list.bullet.rectangle", color: .teal,
@@ -847,7 +864,7 @@ struct DashboardView: View {
                 }
             }
         }
-        if let q = store.quotas[p] {
+        if DashItem.share.on, let q = store.quotas[p] {
             let rows = q.breakdown.filter { $0.1 > 0 }
             if !rows.isEmpty {
                 Card {

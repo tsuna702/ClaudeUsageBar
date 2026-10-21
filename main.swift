@@ -512,6 +512,7 @@ enum Pref {
             showIcon: true, useLogo: true, useRing: false, showName: false, showSession: true, showSessionLeft: false, showLeftLabel: true, showWeekly: true,
             showLabels: false, showReset: false, useGauge: false, spacing: 10.0, ringNumber: true,
         ])
+        UserDefaults.standard.register(defaults: DashItem.defaults)
     }
 
     static func on(_ key: String) -> Bool { UserDefaults.standard.bool(forKey: key) }
@@ -763,6 +764,9 @@ struct SettingsView: View {
         if nav.page == .menubar {
             MenubarCatalogView(store: store)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if nav.page == .dashboard {
+            DashboardCatalogView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if nav.page == .diagnostics {
             DiagnosticsView(state: diag)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -772,7 +776,7 @@ struct SettingsView: View {
                 case .general: generalPage
                 case .accounts: accountsPage
                 case .alerts: alertsPage
-                case .menubar, .diagnostics: EmptyView()
+                case .menubar, .dashboard, .diagnostics: EmptyView()
                 }
             }
             .formStyle(.grouped)
@@ -892,13 +896,14 @@ struct SettingsView: View {
 
 // 설정창 왼쪽 목록 항목
 enum SettingsPage: CaseIterable {
-    case general, accounts, menubar, alerts, diagnostics
+    case general, accounts, menubar, dashboard, alerts, diagnostics
 
     var title: String {
         switch self {
         case .general: return L("일반", "General")
         case .accounts: return L("계정", "Accounts")
         case .menubar: return L("메뉴 막대", "Menu Bar")
+        case .dashboard: return L("대시보드", "Dashboard")
         case .alerts: return L("경고와 알림", "Alerts")
         case .diagnostics: return L("진단", "Diagnostics")
         }
@@ -909,6 +914,7 @@ enum SettingsPage: CaseIterable {
         case .general: return "gearshape.fill"
         case .accounts: return "person.crop.circle.fill"
         case .menubar: return "menubar.rectangle"
+        case .dashboard: return "rectangle.grid.2x2"
         case .alerts: return "bell.badge.fill"
         case .diagnostics: return "stethoscope"
         }
@@ -919,6 +925,7 @@ enum SettingsPage: CaseIterable {
         case .general: return .gray
         case .accounts: return .blue
         case .menubar: return .purple
+        case .dashboard: return .orange
         case .alerts: return .red
         case .diagnostics: return .green
         }
@@ -1237,6 +1244,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let img = cat.nsImage, let tiff = img.tiffRepresentation,
            let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
             try? png.write(to: URL(fileURLWithPath: dir + "/catalog.png"))
+        }
+        let dcat = ImageRenderer(content: DashboardCatalogView(flat: true).frame(width: 520)
+            .background(Color(nsColor: .windowBackgroundColor)))
+        dcat.scale = 2
+        if let img = dcat.nsImage, let tiff = img.tiffRepresentation,
+           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: dir + "/dash-catalog.png"))
         }
         print("snapshot saved"); fflush(stdout)
     }
