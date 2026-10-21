@@ -87,6 +87,57 @@ enum Net {
 
 // MARK: - API 키 보관 (앱 전용 키체인 항목)
 
+// 앱이 직접 보관하는 비밀값(API 키, 저장된 계정, Claude 로그인 사본)은 나만 읽을 수 있는 파일로 둠
+// (키체인은 개인 서명 앱을 코드 해시로 알아봐서, 빌드·업데이트마다 암호를 다시 물음)
+// ~/Library/Application Support/UsageBar/secrets/ (폴더 700, 파일 600)
+enum SecretStore {
+    static let lock = NSLock()
+
+    static let dir: URL = {
+        let d = History.url.deletingLastPathComponent().appendingPathComponent("secrets", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: d.path)
+        return d
+    }()
+
+    static func url(_ name: String) -> URL {
+        let safe = name.map { $0.isLetter || $0.isNumber || "-_.@".contains($0) ? String($0) : "_" }.joined()
+        return dir.appendingPathComponent(safe)
+    }
+
+    static func read(_ name: String) -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        return FileManager.default.contents(atPath: url(name).path)
+    }
+
+    @discardableResult
+    static func write(_ name: String, _ data: Data) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let u = url(name)
+        // 만들 때부터 600 (잠깐이라도 다른 권한으로 보이지 않게)
+        let tmp = u.appendingPathExtension("tmp")
+        guard FileManager.default.createFile(atPath: tmp.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return false }
+        if FileManager.default.fileExists(atPath: u.path) { try? FileManager.default.removeItem(at: u) }
+        return (try? FileManager.default.moveItem(at: tmp, to: u)) != nil
+    }
+
+    static func delete(_ name: String) {
+        lock.lock(); defer { lock.unlock() }
+        try? FileManager.default.removeItem(at: url(name))
+    }
+
+    // 예전 버전이 키체인에 둔 값: 파일로 옮기고 키체인 항목은 지움 (한 번만, 이때 암호를 물을 수 있음)
+    static func migrate(_ name: String, from query: [String: Any]) -> Data? {
+        var q = query
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        if write(name, d) { SecItemDelete(query as CFDictionary) }
+        return d
+    }
+}
+
 enum KeyStore {
     static let service = "UsageBar API key"
 
@@ -95,24 +146,20 @@ enum KeyStore {
     }
 
     static func get(_ name: String) -> String? {
-        var q = query(name)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
+        let file = "key." + name
+        guard let d = SecretStore.read(file) ?? SecretStore.migrate(file, from: query(name)) else { return nil }
         let s = String(decoding: d, as: UTF8.self)
         return s.isEmpty ? nil : s
     }
 
     static func set(_ name: String, _ value: String) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { SecItemDelete(query(name) as CFDictionary); return }
-        let data = Data(trimmed.utf8)
-        if SecItemUpdate(query(name) as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecItemNotFound {
-            var add = query(name)
-            add[kSecValueData as String] = data
-            SecItemAdd(add as CFDictionary, nil)
+        if trimmed.isEmpty {
+            SecretStore.delete("key." + name)
+            SecItemDelete(query(name) as CFDictionary)
+            return
         }
+        SecretStore.write("key." + name, Data(trimmed.utf8))
     }
 }
 

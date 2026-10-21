@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-// 저장된 계정: 로그인 정보를 키체인에 따로 보관해 두고, 고르면 공식 위치에 되돌려 써서 전환
+// 저장된 계정: 로그인 정보를 앱 폴더의 비밀 파일(SecretStore)에 따로 보관해 두고, 고르면 공식 위치에 되돌려 써서 전환
 // - Claude: 키체인 "Claude Code-credentials" + ~/.claude.json 의 oauthAccount
 // - Codex:  ~/.codex/auth.json
 // 전환하면 Claude Code / Codex 자체도 그 계정을 쓰게 됨
@@ -62,31 +62,23 @@ enum AccountStore {
          kSecAttrAccount as String: keychainAccount(p, email)]
     }
 
+    static func fileName(_ p: Provider, _ email: String) -> String { "account." + keychainAccount(p, email) }
+
+    // 파일에 보관 (예전 버전이 키체인에 둔 것은 처음 읽을 때 파일로 옮김)
     static func readSaved(_ p: Provider, _ email: String) -> Data? {
-        var q = query(p, email)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return nil }
-        return out as? Data
+        SecretStore.read(fileName(p, email)) ?? SecretStore.migrate(fileName(p, email), from: query(p, email))
     }
 
     static func writeSaved(_ p: Provider, _ email: String, _ blob: Data) -> Bool {
-        let q = query(p, email)
-        let status = SecItemUpdate(q as CFDictionary, [kSecValueData as String: blob] as CFDictionary)
-        if status == errSecSuccess { return true }
-        guard status == errSecItemNotFound else { return false }
-        var add = q
-        add[kSecValueData as String] = blob
-        add[kSecAttrLabel as String] = "\(service) (\(p.name))"
-        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        SecretStore.write(fileName(p, email), blob)
     }
 
     static func deleteSaved(_ p: Provider, _ email: String) {
+        SecretStore.delete(fileName(p, email))
         SecItemDelete(query(p, email) as CFDictionary)
     }
 
-    // 새로고침마다 키체인을 읽고 쓰지 않도록, 이미 저장된 계정은 10분에 한 번만 확인
+    // 새로고침마다 저장 정보를 읽고 쓰지 않도록, 이미 저장된 계정은 10분에 한 번만 확인
     static var lastSave: [String: Date] = [:]
 
     static func saveIfNeeded(_ p: Provider, email: String) {

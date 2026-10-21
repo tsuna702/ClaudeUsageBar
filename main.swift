@@ -265,9 +265,32 @@ enum ClaudeAPI {
         let st = stamp()
         guard !st.isEmpty else { cache = nil; return nil }   // 로그아웃됨
         if !fresh, let c = cache, st == cacheStamp { return c }
+        // 앱을 새로 켜도(빌드·업데이트 후) Claude Code 항목이 그대로면 앱 전용 사본을 씀
+        // (앱이 만든 항목이라 같은 서명이면 암호를 묻지 않음)
+        if !fresh, cache == nil, let saved = loadCopy(), saved.stamp == st {
+            cache = saved.cred; cacheStamp = st
+            return cache
+        }
         cache = readCredentials()
         cacheStamp = st
+        saveCopy(st, cache)
         return cache
+    }
+
+    static let copyName = "claude-credentials-copy"
+
+    static func loadCopy() -> (stamp: String, cred: [String: Any])? {
+        guard let text = KeyStore.get(copyName),
+              let json = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
+              let st = json["stamp"] as? String, let cred = json["cred"] as? [String: Any] else { return nil }
+        return (st, cred)
+    }
+
+    static func saveCopy(_ stamp: String, _ cred: [String: Any]?) {
+        guard let cred, let data = try? JSONSerialization.data(withJSONObject: ["stamp": stamp, "cred": cred]) else {
+            KeyStore.set(copyName, ""); return
+        }
+        KeyStore.set(copyName, String(decoding: data, as: UTF8.self))
     }
 
     static func forget() {
@@ -289,7 +312,7 @@ enum ClaudeAPI {
         let hex = data.map { String(format: "%02x", $0) }.joined()
         let cmd = "add-generic-password -U -a \"\(account)\" -s \"\(service)\" -X \(hex)\n"
         let ok = security(["-i"], stdin: cmd).0 == 0
-        if ok { cacheLock.lock(); cache = json; cacheStamp = stamp(); cacheLock.unlock() }
+        if ok { cacheLock.lock(); cache = json; cacheStamp = stamp(); saveCopy(cacheStamp, json); cacheLock.unlock() }
         return ok
     }
 
@@ -728,7 +751,7 @@ struct SettingsView: View {
             detail
         }
         .id(lang)
-        .frame(width: 720, height: 520)
+        .frame(width: 900, height: 640)
     }
 
     // 왼쪽 목록
@@ -765,7 +788,7 @@ struct SettingsView: View {
             MenubarCatalogView(store: store)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if nav.page == .dashboard {
-            DashboardCatalogView()
+            DashboardCatalogView(store: store)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if nav.page == .diagnostics {
             DiagnosticsView(state: diag)
@@ -1245,7 +1268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
             try? png.write(to: URL(fileURLWithPath: dir + "/catalog.png"))
         }
-        let dcat = ImageRenderer(content: DashboardCatalogView(flat: true).frame(width: 520)
+        let dcat = ImageRenderer(content: DashboardCatalogView(store: store, flat: true).frame(width: 700)
             .background(Color(nsColor: .windowBackgroundColor)))
         dcat.scale = 2
         if let img = dcat.nsImage, let tiff = img.tiffRepresentation,

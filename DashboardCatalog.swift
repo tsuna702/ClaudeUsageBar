@@ -60,6 +60,58 @@ enum DashItem: String, CaseIterable {
         (L("서비스 탭", "Service Tabs"), nil, [.extraLimits, .trend, .costTokens, .workTime, .hourly, .daily, .rank, .credits, .share]),
     ]
 
+    // MARK: 순서
+
+    // 자리를 옮길 수 있는 항목 (소진 예측 문구는 카드 안의 옵션이라 빠짐)
+    static let defaultOrder: [DashItem] = [.outage, .update, .account, .session, .weekly, .today,
+                                           .extraLimits, .trend, .costTokens, .workTime, .hourly, .daily, .rank, .credits, .share]
+    static let orderKey = "dash_order"
+
+    static var order: [DashItem] {
+        get {
+            let saved = (UserDefaults.standard.string(forKey: orderKey) ?? "").split(separator: ",").compactMap { DashItem(rawValue: String($0)) }
+            var out = saved.filter { defaultOrder.contains($0) }
+            // 새로 생긴 항목은 기본 순서에서 앞 항목 바로 뒤에 넣음
+            for (i, item) in defaultOrder.enumerated() where !out.contains(item) {
+                let prev = defaultOrder[..<i].last { out.contains($0) }
+                out.insert(item, at: prev.flatMap { out.firstIndex(of: $0) }.map { $0 + 1 } ?? 0)
+            }
+            return out
+        }
+        set { UserDefaults.standard.set(newValue.map(\.rawValue).joined(separator: ","), forKey: orderKey) }
+    }
+
+    static func index(_ item: DashItem) -> Int { order.firstIndex(of: item) ?? 0 }
+    static var accountFirst: Bool { index(.account) < min(index(.session), index(.weekly)) }
+    static var sessionFirst: Bool { index(.session) < index(.weekly) }
+
+    // 그릴 순서: 켜진 항목만. 계정 줄·세션·주간은 서비스 묶음 하나(.account 자리)로 합침
+    static func layout(forService: Bool) -> [DashItem] {
+        var out: [DashItem] = []
+        for item in order {
+            switch item {
+            case .account, .session, .weekly:
+                if !out.contains(.account) { out.append(.account) }
+            case .today:
+                if !forService, item.on { out.append(item) }
+            case .outage, .update:
+                if item.on { out.append(item) }
+            default:
+                if forService, item.on { out.append(item) }
+            }
+        }
+        return out
+    }
+
+    // 어느 탭에 나오는지
+    var whereText: String {
+        switch self {
+        case .account, .session, .weekly, .outage, .update: return L("모든 탭", "All tabs")
+        case .today: return L("전체 탭", "All tab")
+        default: return L("서비스 탭", "Service tabs")
+        }
+    }
+
     static var defaults: [String: Any] { Dictionary(uniqueKeysWithValues: allCases.map { ($0.key, true as Any) }) }
 }
 
@@ -77,54 +129,113 @@ struct DashItemChip: View {
     }
 }
 
-struct DashboardCatalogView: View {
-    var flat = false   // 스냅샷용: 스크롤 없이 그림
+// 순서 목록의 한 줄: 끌어서 옮기고, 스위치로 켜고 끔
+struct DashOrderRow: View {
+    let item: DashItem
+    @AppStorage var on: Bool
 
-    var body: some View {
-        if flat { content } else { ScrollView { content } }
+    init(_ item: DashItem) {
+        self.item = item
+        _on = AppStorage(wrappedValue: true, item.key)
     }
 
-    var content: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 8) {
-                Image(systemName: "rectangle.grid.2x2").font(.system(size: 15))
-                Text(L("대시보드에 보일 항목", "Dashboard Items")).font(.system(size: 15, weight: .semibold))
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary)
+            Image(systemName: item.symbol).foregroundStyle(on ? Color.accentColor : .secondary).frame(width: 18)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(item.title).font(.system(size: 12, weight: .medium))
+                Text(item.whereText).font(.system(size: 10)).foregroundStyle(.secondary)
             }
-            Text(L("메뉴 막대를 누르면 뜨는 패널에 무엇을 보일지 골라요. 끈 항목은 자리를 차지하지 않아요.",
-                   "Choose what the panel shows when you click the menu bar. Hidden items take no space."))
-                .font(.system(size: 12)).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 18) {
-                ForEach(DashItem.groups.indices, id: \.self) { i in
-                    let g = DashItem.groups[i]
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Text(g.title).font(.system(size: 13, weight: .semibold))
-                            if let note = g.note { Text("(\(note))").font(.system(size: 12)).foregroundStyle(.secondary) }
-                        }
-                        FlowLayout(spacing: 8) {
-                            ForEach(g.items, id: \.self) { DashItemChip($0) }
-                        }
-                    }
-                }
-                Divider()
-                HStack {
-                    Spacer()
-                    Button {
-                        for item in DashItem.allCases { UserDefaults.standard.removeObject(forKey: item.key) }
-                    } label: {
-                        Label(L("모두 보이기", "Show All"), systemImage: "arrow.counterclockwise")
-                            .padding(.horizontal, 14).padding(.vertical, 7)
-                            .background(Capsule().fill(Color.primary.opacity(0.08)))
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 13, weight: .medium))
-                }
-            }
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(nsColor: .textBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.06)))
+            Spacer()
+            Toggle("", isOn: $on).labelsHidden().toggleStyle(.switch).controlSize(.mini)
         }
-        .padding(24)
+        .opacity(on ? 1 : 0.55)
+        .padding(.vertical, 2)
+    }
+}
+
+final class DashOrderState: ObservableObject {
+    @Published var items = DashItem.order
+    func move(_ from: IndexSet, _ to: Int) {
+        items.move(fromOffsets: from, toOffset: to)
+        DashItem.order = items
+    }
+    func reset() {
+        UserDefaults.standard.removeObject(forKey: DashItem.orderKey)
+        for item in DashItem.allCases { UserDefaults.standard.removeObject(forKey: item.key) }
+        items = DashItem.order
+    }
+}
+
+// 설정 > 대시보드: 왼쪽은 순서·켜고 끄기, 오른쪽은 바로 바뀌는 미리보기
+struct DashboardCatalogView: View {
+    @ObservedObject var store: UsageStore
+    var flat = false   // 스냅샷용
+    @StateObject var state = DashOrderState()
+    @StateObject var preview: DashState = {
+        let s = DashState()
+        s.height = 900
+        return s
+    }()
+    @AppStorage(DashItem.forecast.key) var forecast = true
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "rectangle.grid.2x2").font(.system(size: 14))
+                    Text(L("대시보드 항목", "Dashboard Items")).font(.system(size: 14, weight: .semibold))
+                }
+                Text(L("끌어서 순서를 바꾸고, 스위치로 보일지 정해요.", "Drag to reorder; switch to show or hide."))
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                list
+                Toggle(L("한도 카드에 소진 예측 문구", "Pace forecast on limit cards"), isOn: $forecast)
+                    .toggleStyle(.switch).controlSize(.small).font(.system(size: 12))
+                Button { state.reset() } label: {
+                    Label(L("기본값으로", "Reset"), systemImage: "arrow.counterclockwise")
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Capsule().fill(Color.primary.opacity(0.08)))
+                }
+                .buttonStyle(.plain).font(.system(size: 12, weight: .medium))
+            }
+            .frame(width: 290)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L("미리보기", "Preview")).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                previewPanel
+            }
+        }
+        .padding(20)
+    }
+
+    @ViewBuilder var list: some View {
+        if flat {
+            VStack(spacing: 4) { ForEach(state.items, id: \.self) { DashOrderRow($0) } }
+        } else {
+            List {
+                ForEach(state.items, id: \.self) { DashOrderRow($0) }
+                    .onMove { state.move($0, $1) }
+            }
+            .listStyle(.bordered(alternatesRowBackgrounds: false))
+            .frame(maxHeight: .infinity)
+        }
+    }
+
+    // 실제 대시보드를 줄여서 보여줌 (탭도 눌러 볼 수 있음)
+    var previewPanel: some View {
+        let scale: CGFloat = 0.8
+        let h: CGFloat = flat ? 900 : 640
+        return ScrollView(showsIndicators: false) {
+            DashboardView(store: store, ui: preview, onRefresh: {}, onSettings: {}, onQuit: {}, flat: true)
+                .frame(width: 400)
+                .scaleEffect(scale, anchor: .topLeading)
+                .frame(width: 400 * scale, alignment: .topLeading)
+                .allowsHitTesting(true)
+        }
+        .frame(width: 400 * scale, height: h * scale)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color(nsColor: .windowBackgroundColor)))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.1)))
     }
 }

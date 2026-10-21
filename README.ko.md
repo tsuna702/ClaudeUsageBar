@@ -16,7 +16,7 @@ Claude, Codex, Gemini, Antigravity, Cursor, Grok, OpenAI API, Cloudflare Workers
   - 모델별·프로젝트별 사용 순위 (오늘 / 7일 / 30일)
 - **알림**: 사용량이 경고 기준을 넘을 때, 한도에 가까웠던 창이 초기화될 때 알려줘요.
 - **계정 연결**: 공식 CLI(`claude auth login`, `codex login`)로 로그인하고, 로그인이 끝나면 자동으로 사용량을 불러와요.
-- **저장된 계정**: 로그인한 계정을 키체인에 보관해 두고 바로 전환할 수 있어요. 전환하면 Claude Code나 Codex가 쓰는 계정도 함께 바뀌어요.
+- **저장된 계정**: 로그인한 계정을 `~/Library/Application Support/UsageBar/secrets` 안의 나만 읽을 수 있는 파일(권한 600)에 보관해 두고 바로 전환할 수 있어요. 업데이트할 때마다 키체인 암호를 묻지 않아요. 전환하면 Claude Code나 Codex가 쓰는 계정도 함께 바뀌어요.
 - **CSV 내보내기**: 일별·모델별·프로젝트별 집계와 한도 기록을 파일로 저장해요.
 - **업데이트 확인**: GitHub Releases에 새 버전이 올라오면 알려줘요.
 - **서비스 장애 표시**: 공식 상태 페이지에 장애가 올라오면 대시보드에 배너를 띄워요.
