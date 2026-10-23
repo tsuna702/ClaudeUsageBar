@@ -662,21 +662,17 @@ enum Format {
     }
 
     // 경고 색 단계: 0 보통, 1 주황, 2 빨강
-    static func level(_ q: Quota) -> Int {
-        let d = UserDefaults.standard
-        guard d.bool(forKey: Pref.colorWarnings) else { return 0 }
-        if q.limitReached { return 2 }
-        let worst = max(q.session?.percent ?? 0, q.weekly?.percent ?? 0)
-        if worst >= d.double(forKey: Pref.redAt) { return 2 }
-        if worst >= d.double(forKey: Pref.orangeAt) { return 1 }
-        return 0
+    // 메뉴 막대 색: 대시보드와 같은 위험도 (쓴 양 + 속도)
+    static func level(_ q: Quota, _ p: Provider) -> Int {
+        guard UserDefaults.standard.bool(forKey: Pref.colorWarnings) else { return 0 }
+        return min(2, Assess.worst(p, q))
     }
 
     // 메뉴 막대 전체 문구 (서비스별로 색을 따로 입힘)
     static func segments(_ quotas: [Provider: Quota], sampleIfMissing: Bool) -> [([Part], Int, Provider)] {
         Provider.allCases.filter(Pref.enabled).compactMap { p in
             guard let q = quotas[p] ?? (sampleIfMissing ? .sample : nil) else { return nil }
-            return (merged(parts(q, p)), level(q), p)
+            return (merged(parts(q, p)), level(q, p), p)
         }
     }
 }

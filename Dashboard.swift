@@ -188,37 +188,17 @@ struct LimitCard: View {
     var recentRate: Double? = nil   // 기록으로 구한 최근 속도 (%/초)
     var showForecast = DashItem.forecast.on
 
-    // 소진 예상: 최근 45분 기록이 있으면 그 속도로, 없으면 창이 시작된 뒤 평균 속도로 계산
-    func forecast(used: Double) -> (text: String, ok: Bool)? {
-        guard let reset = bucket?.resetsAt else { return nil }
-        let left = reset.timeIntervalSinceNow
-        let elapsed = window - left
-        if used >= 100 { return (L("한도 소진 — 초기화 대기", "Limit reached — waiting for reset"), false) }
-        guard left > 0 else { return nil }
-        // 최근 45분 속도와 이 창이 시작된 뒤 평균 속도 중 빠른 쪽으로 봄
-        // (잠깐 쉬었다고 '여유'라고 하면, 이미 많이 쓴 창에서 다시 쓰기 시작할 때 금방 바닥남)
-        let average: Double? = used > 0 && elapsed > 300 ? used / elapsed : nil
-        let recent = recentRate
-        let rate = max(recent ?? 0, average ?? 0)
-        guard rate > 0 else {
-            return recent != nil ? (L("최근 사용 없음 — 여유", "No recent use — on track"), true) : nil
-        }
-        let toEmpty = (100 - used) / rate
-        if toEmpty < left {
-            // 최근엔 덜 썼지만 평균 속도로는 모자람
-            let byAverage = (recent ?? 0) < (average ?? 0)
-            return byAverage
-                ? (L("평소 속도면 \(Fmt.span(toEmpty)) 후 소진", "At your usual pace, empty in \(Fmt.span(toEmpty))"), false)
-                : (L("이 속도면 \(Fmt.span(toEmpty)) 후 소진", "At this pace, empty in \(Fmt.span(toEmpty))"), false)
-        }
-        if recent == 0 { return (L("최근 사용 없음 — 여유", "No recent use — on track"), true) }
-        return (L("이 속도면 초기화 전까지 여유", "At this pace, lasts until reset"), true)
+    // 위험도와 예측 문구는 모든 화면이 같은 계산(Assess)을 씀
+    var assessment: Assessment {
+        Assess.evaluate(used: bucket?.percent ?? 0, resetsAt: bucket?.resetsAt, window: window,
+                        recentRate: recentRate, limitReached: limitReached)
     }
 
     var body: some View {
         let used = bucket?.percent ?? 0
         let left = max(0, 100 - used)
-        let lvl = limitReached && used >= 100 ? 2 : Theme.level(used)
+        let a = assessment
+        let lvl = min(2, a.level)
         // 남은 시간 비율: 막대보다 ▲가 오른쪽이면 지금 속도로는 초기화 전에 소진
         let timeLeft = bucket?.resetsAt.map { max(0, min(1, $0.timeIntervalSinceNow / window)) }
         Card {
@@ -226,7 +206,7 @@ struct LimitCard: View {
                 HStack {
                     CardTitle(symbol: symbol, color: .accentColor, text: title)
                     Spacer()
-                    Chip(text: Theme.levelText(lvl, full: left <= 0), color: Theme.levelColor(lvl))
+                    Chip(text: Theme.levelText(lvl, full: a.level == 3), color: Theme.levelColor(lvl))
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 2) {
                     Text(bucket == nil ? "–" : "\(Int(left.rounded()))")
@@ -236,13 +216,14 @@ struct LimitCard: View {
                     Text(L("남음", "left")).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
                 }
                 ProgressBar(fraction: left / 100, marker: timeLeft)
-                if showForecast, let eta = forecast(used: used) {
+                if showForecast, let text = a.text {
                     HStack(spacing: 4) {
-                        Image(systemName: eta.ok ? "checkmark.circle.fill" : "flame.fill").font(.system(size: 9))
-                        Text(eta.text).lineLimit(1).minimumScaleFactor(0.7)
+                        Image(systemName: a.paceOK ? "checkmark.circle.fill" : "flame.fill").font(.system(size: 9))
+                        Text(text).lineLimit(1).minimumScaleFactor(0.7)
                     }
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(eta.ok ? Color.green : Color.orange)
+                    // 문구 색도 위험도를 따름 (속도는 괜찮아도 남은 양이 적으면 주황)
+                    .foregroundStyle(a.paceOK && a.level == 0 ? Color.green : (a.level >= 2 ? Color.red : Color.orange))
                 }
                 HStack(spacing: 4) {
                     Image(systemName: "clock.fill").font(.system(size: 9))
@@ -598,10 +579,10 @@ struct DashboardView: View {
         var items: [(Int, String)] = []
         for p in providers {
             guard let q = store.quotas[p] else { continue }
-            for (name, b) in [(q.session?.label ?? L("세션", "session"), q.session), (q.weekly?.label ?? L("주간", "weekly"), q.weekly)] {
-                guard let b else { continue }
-                let score = b.percent >= 100 ? 3 : Theme.level(b.percent)
-                if score > 0 { items.append((score, "\(p.name) \(name)")) }
+            for (kind, b) in [(LimitKind.session, q.session), (LimitKind.weekly, q.weekly)] {
+                guard let b, let a = Assess.bucket(p, kind, q) else { continue }
+                let name = b.label ?? (kind == .session ? L("세션", "session") : L("주간", "weekly"))
+                if a.level > 0 { items.append((a.level, "\(p.name) \(name)")) }
             }
             // 퍼센트 없이 한도 도달만 알려주는 서비스
             if q.limitReached, !items.contains(where: { $0.1.hasPrefix(p.name) && $0.0 == 3 }) { items.append((3, p.name)) }
@@ -615,7 +596,7 @@ struct DashboardView: View {
     var badgeText: String {
         let w = worst
         guard w.score > 0 else { return L("정상", "Healthy") }
-        let state = [L("주의", "watch"), L("한도 임박", "near limit"), L("소진", "used up")][w.score - 1]
+        let state = [L("주의", "watch"), L("위험", "at risk"), L("소진", "used up")][w.score - 1]
         let more = w.more > 0 ? L(" 외 \(w.more)", " +\(w.more)") : ""
         return "\(w.text)\(more) \(state)"
     }
