@@ -195,16 +195,24 @@ struct LimitCard: View {
         let elapsed = window - left
         if used >= 100 { return (L("한도 소진 — 초기화 대기", "Limit reached — waiting for reset"), false) }
         guard left > 0 else { return nil }
-        let rate: Double
-        if let r = recentRate {
-            if r <= 0 { return (L("최근 사용 없음 — 여유", "No recent use — on track"), true) }
-            rate = r
-        } else {
-            guard used > 0, elapsed > 300 else { return nil }
-            rate = used / elapsed
+        // 최근 45분 속도와 이 창이 시작된 뒤 평균 속도 중 빠른 쪽으로 봄
+        // (잠깐 쉬었다고 '여유'라고 하면, 이미 많이 쓴 창에서 다시 쓰기 시작할 때 금방 바닥남)
+        let average: Double? = used > 0 && elapsed > 300 ? used / elapsed : nil
+        let recent = recentRate
+        let rate = max(recent ?? 0, average ?? 0)
+        guard rate > 0 else {
+            return recent != nil ? (L("최근 사용 없음 — 여유", "No recent use — on track"), true) : nil
         }
         let toEmpty = (100 - used) / rate
-        return toEmpty < left ? (L("이 속도면 \(Fmt.span(toEmpty)) 후 소진", "At this pace, empty in \(Fmt.span(toEmpty))"), false) : (L("이 속도면 초기화 전까지 여유", "At this pace, lasts until reset"), true)
+        if toEmpty < left {
+            // 최근엔 덜 썼지만 평균 속도로는 모자람
+            let byAverage = (recent ?? 0) < (average ?? 0)
+            return byAverage
+                ? (L("평소 속도면 \(Fmt.span(toEmpty)) 후 소진", "At your usual pace, empty in \(Fmt.span(toEmpty))"), false)
+                : (L("이 속도면 \(Fmt.span(toEmpty)) 후 소진", "At this pace, empty in \(Fmt.span(toEmpty))"), false)
+        }
+        if recent == 0 { return (L("최근 사용 없음 — 여유", "No recent use — on track"), true) }
+        return (L("이 속도면 초기화 전까지 여유", "At this pace, lasts until reset"), true)
     }
 
     var body: some View {
