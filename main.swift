@@ -959,7 +959,7 @@ final class SettingsNav: ObservableObject {
 
 // MARK: - 앱
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let store = UsageStore()
     var timer: Timer?
@@ -1001,6 +1001,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.animates = true
         // 대시보드는 미리 한 번 만들어 둠 (열 때마다 새로 만들면 여는 데 0.25초쯤 걸림)
         popover.contentViewController = makeDashboard()
+        popover.delegate = self
         refresh()
         scheduleTimer()
         // 업데이트 확인: 실행할 때 + 하루에 한 번
@@ -1097,10 +1098,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let h = min(760, visible - 70)
             ui.height = h
             popover.contentSize = NSSize(width: 400, height: h)
+            Clock.shared.start()   // 열 때 바로 지금 시각으로 다시 그리고, 열려 있는 동안 30초마다
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        Clock.shared.stop()
     }
 
     func makeDashboard() -> NSViewController {

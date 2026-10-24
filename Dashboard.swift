@@ -27,6 +27,25 @@ final class DashState: ObservableObject {
     @Published var trendWeekly = false      // 사용 추이: 세션 / 주간   // 팝오버 전체 높이 (열 때 화면에 맞춰 정함)
 }
 
+// 대시보드가 열려 있는 동안 30초마다 바뀌는 시계
+// (값이 그대로인 카드는 SwiftUI가 다시 그리지 않아서, 남은 시간이 처음 그린 때에 멈춰 있었음)
+final class Clock: ObservableObject {
+    static let shared = Clock()
+    @Published var now = Date()
+    private var timer: Timer?
+
+    func start() {
+        now = Date()
+        guard timer == nil else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.now = Date() }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+}
+
 // MARK: - 색과 포맷
 
 enum Theme {
@@ -180,6 +199,7 @@ struct ProgressBar: View {
 // MARK: - 한도 카드
 
 struct LimitCard: View {
+    @ObservedObject var clock = Clock.shared   // 남은 시간처럼 지금 시각에 따라 바뀌는 값을 주기적으로 다시 그림
     let title: String
     let symbol: String
     let bucket: Bucket?
@@ -195,6 +215,7 @@ struct LimitCard: View {
     }
 
     var body: some View {
+        let _ = clock.now
         let used = bucket?.percent ?? 0
         let left = max(0, 100 - used)
         let a = assessment
@@ -293,11 +314,13 @@ func compare(_ today: Double, _ yesterday: Double, _ format: (Double) -> String)
 // MARK: - 계정 줄
 
 struct AccountRow: View {
+    @ObservedObject var clock = Clock.shared   // 남은 시간처럼 지금 시각에 따라 바뀌는 값을 주기적으로 다시 그림
     let provider: Provider
     @ObservedObject var store: UsageStore
     @ObservedObject var ui: DashState
 
     var body: some View {
+        let _ = clock.now
         let q = store.quotas[provider]
         let email = q?.email ?? provider.name
         Card {
@@ -342,11 +365,13 @@ struct AccountRow: View {
 // MARK: - 일별 차트
 
 struct DailyChart: View {
+    @ObservedObject var clock = Clock.shared   // 남은 시간처럼 지금 시각에 따라 바뀌는 값을 주기적으로 다시 그림
     let provider: Provider
     let stats: LocalStats
     @ObservedObject var ui: DashState
 
     var body: some View {
+        let _ = clock.now
         let cost = stats.hasCost && ui.chartCost
         let data = stats.last30
         let values = data.map { cost ? $0.stat.cost : $0.stat.tokens }
@@ -396,11 +421,13 @@ struct DailyChart: View {
 // MARK: - 오늘 시간대별
 
 struct HourlyChart: View {
+    @ObservedObject var clock = Clock.shared   // 남은 시간처럼 지금 시각에 따라 바뀌는 값을 주기적으로 다시 그림
     let provider: Provider
     let stats: LocalStats
     @ObservedObject var ui: DashState
 
     var body: some View {
+        let _ = clock.now
         let cost = stats.hasCost && ui.chartCost
         let rows = stats.todayHours
         let now = Calendar.current.component(.hour, from: Date())
@@ -444,11 +471,13 @@ struct HourlyChart: View {
 // MARK: - 한도 사용 추이 (기록한 %를 선으로)
 
 struct TrendChart: View {
+    @ObservedObject var clock = Clock.shared   // 남은 시간처럼 지금 시각에 따라 바뀌는 값을 주기적으로 다시 그림
     let provider: Provider
     let quota: Quota
     @ObservedObject var ui: DashState
 
     var body: some View {
+        let _ = clock.now
         let weekly = ui.trendWeekly && quota.weekly != nil
         let kind: LimitKind = weekly ? .weekly : .session
         let bucket = weekly ? quota.weekly : quota.session
