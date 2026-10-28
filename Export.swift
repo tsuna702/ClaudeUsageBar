@@ -26,7 +26,7 @@ enum Export {
             }
         }
         let iso = ISO8601DateFormatter()
-        for smp in History.samples {
+        for smp in History.samples.values.joined().sorted(by: { $0.t < $1.t }) {
             let t = iso.string(from: Date(timeIntervalSince1970: smp.t))
             if let v = smp.s { rows.append(["limit_session", smp.p, t, "", "", "", "", "", "", n(v, 1)].joined(separator: ",")) }
             if let v = smp.w { rows.append(["limit_weekly", smp.p, t, "", "", "", "", "", "", n(v, 1)].joined(separator: ",")) }

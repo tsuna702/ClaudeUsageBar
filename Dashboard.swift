@@ -38,6 +38,7 @@ final class Clock: ObservableObject {
         now = Date()
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.now = Date() }
+        timer?.tolerance = 5
     }
 
     func stop() {
@@ -125,12 +126,15 @@ enum Fmt {
         return "\(parts[0].prefix(1))•••@\(domain.first?.prefix(1) ?? "")•••\(tld)"
     }
 
-    static let yesterday: String = {
+    static let monthDay: DateFormatter = {
         let f = DateFormatter()
         f.locale = Lang.locale
         f.dateFormat = "M/d"
-        return f.string(from: Calendar.current.date(byAdding: .day, value: -1, to: Date())!)
+        return f
     }()
+
+    // 어제 날짜 (자정이 지나면 바뀌도록 매번 계산)
+    static var yesterday: String { monthDay.string(from: Calendar.current.date(byAdding: .day, value: -1, to: Date())!) }
 }
 
 // MARK: - 공통 카드
@@ -620,10 +624,7 @@ struct DashboardView: View {
         return (top.0, top.1, items.filter { $0.0 == top.0 }.count - 1)
     }
 
-    var overall: Int { min(2, worst.score) }
-
-    var badgeText: String {
-        let w = worst
+    func badgeText(_ w: (score: Int, text: String, more: Int)) -> String {
         guard w.score > 0 else { return L("정상", "Healthy") }
         let state = [L("주의", "watch"), L("위험", "at risk"), L("소진", "used up")][w.score - 1]
         let more = w.more > 0 ? L(" 외 \(w.more)", " +\(w.more)") : ""
@@ -654,7 +655,9 @@ struct DashboardView: View {
     }
 
     var header: some View {
-        HStack(spacing: 12) {
+        let w = worst
+        let overall = min(2, w.score)
+        return HStack(spacing: 12) {
             Image(nsImage: Theme.appIcon).resizable().interpolation(.high).frame(width: 48, height: 48)
             VStack(alignment: .leading, spacing: 1) {
                 Text("UsageBar").font(.system(size: 18, weight: .bold))
@@ -664,7 +667,7 @@ struct DashboardView: View {
             HStack(spacing: 6) {
                 Circle().fill(Theme.levelColor(overall)).frame(width: 9, height: 9)
                     .overlay(Circle().stroke(Theme.levelColor(overall).opacity(0.3), lineWidth: 4))
-                Text(badgeText).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                Text(badgeText(w)).font(.system(size: 12, weight: .semibold)).lineLimit(1)
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(Capsule().fill(Color(nsColor: .textBackgroundColor).opacity(0.8)))

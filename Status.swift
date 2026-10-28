@@ -2,7 +2,7 @@ import Foundation
 
 // 서비스 장애 상태: 공식 상태 페이지 확인 (Statuspage 형식 + Google Cloud 장애 목록)
 
-struct ServiceStatus {
+struct ServiceStatus: Equatable {
     let level: Int          // 0 정상, 1 일부 장애, 2 큰 장애
     let text: String
     let url: URL

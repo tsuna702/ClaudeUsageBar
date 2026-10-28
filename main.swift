@@ -1,5 +1,6 @@
 import Cocoa
 import SwiftUI
+import Combine
 import ServiceManagement
 
 // Claude · Codex 사용량을 메뉴 막대에 표시하는 앱.
@@ -253,6 +254,12 @@ enum ClaudeAPI {
         return v
     }
 
+    // 새로고침 한 번에 로그인 정보를 여러 번 찾으므로, 방금(10초 안) 확인한 표식은 다시 씀
+    static func recentStamp() -> String {
+        if let s = lastStamp, Date().timeIntervalSince(s.at) < 10 { return s.value }
+        return stamp()
+    }
+
     // 로그인돼 있는지: 방금(10초 안) 확인한 결과가 있으면 그것을 씀 (security를 또 실행하지 않게)
     static func hasLogin() -> Bool {
         cacheLock.lock(); let recent = lastStamp; cacheLock.unlock()
@@ -262,7 +269,7 @@ enum ClaudeAPI {
 
     static func credentials(fresh: Bool = false) -> [String: Any]? {
         cacheLock.lock(); defer { cacheLock.unlock() }
-        let st = stamp()
+        let st = fresh ? stamp() : recentStamp()
         guard !st.isEmpty else { cache = nil; return nil }   // 로그아웃됨
         if !fresh, let c = cache, st == cacheStamp { return c }
         // 앱을 새로 켜도(빌드·업데이트 후) Claude Code 항목이 그대로면 앱 전용 사본을 씀
@@ -294,7 +301,7 @@ enum ClaudeAPI {
     }
 
     static func forget() {
-        cacheLock.lock(); cache = nil; cacheLock.unlock()
+        cacheLock.lock(); cache = nil; lastStamp = nil; cacheLock.unlock()
     }
 
     static func expiresAt(_ json: [String: Any]?) -> Double {
@@ -689,6 +696,12 @@ final class UsageStore: ObservableObject {
     @Published var statuses: [Provider: ServiceStatus] = [:]
     @Published var savedAccounts: [SavedAccount] = AccountStore.all
     @Published var updateStatus = ""
+
+    // 다른 저장소의 값을 그대로 받아 옴 (대시보드 사본용)
+    func copy(from s: UsageStore) {
+        quotas = s.quotas; errors = s.errors; updated = s.updated; local = s.local; loading = s.loading
+        loggedIn = s.loggedIn; update = s.update; statuses = s.statuses; savedAccounts = s.savedAccounts; updateStatus = s.updateStatus
+    }
 }
 
 // 로그인 시 자동 실행 상태
@@ -962,6 +975,9 @@ final class SettingsNav: ObservableObject {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let store = UsageStore()
+    // 대시보드는 사본을 봄: 열려 있을 때만 따라가서, 닫힌 대시보드가 새로고침마다 다시 그려지지 않게
+    let dashStore = UsageStore()
+    var storeWatch: AnyCancellable?
     var timer: Timer?
     var lastUpdated: Date?
     var settingsWindow: NSWindow?
@@ -1002,11 +1018,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // 대시보드는 미리 한 번 만들어 둠 (열 때마다 새로 만들면 여는 데 0.25초쯤 걸림)
         popover.contentViewController = makeDashboard()
         popover.delegate = self
+        storeWatch = store.objectWillChange.sink { [weak self] _ in self?.followStore() }
         refresh()
         scheduleTimer()
         // 업데이트 확인: 실행할 때 + 하루에 한 번
         checkUpdate()
-        Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in self?.checkUpdate() }
+        Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in self?.checkUpdate() }.tolerance = 600
         // 개발용: 실행하자마자 대시보드를 열어 위치 확인
         if ProcessInfo.processInfo.environment["USAGE_OPEN"] != nil, let b = statusItem.button {
             // 값이 숫자면 그만큼(초) 기다렸다가 엶
@@ -1055,6 +1072,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func scheduleTimer() {
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.tick() }
+        timer?.tolerance = 10   // 다른 깨어남과 묶일 수 있게 (정확히 1분일 필요 없음)
+    }
+
+    // 대시보드가 열려 있으면 바뀐 값을 사본에 옮김 (objectWillChange는 바뀌기 직전에 오므로 다음 차례에)
+    var followPending = false
+    func followStore() {
+        guard popover.isShown, !followPending else { return }
+        followPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.followPending = false
+            self.dashStore.copy(from: self.store)
+        }
     }
 
     // 새로 추가된 서비스 중 이미 로그인돼 있는 것은 처음 한 번만 자동으로 켬
@@ -1098,6 +1128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             let h = min(760, visible - 70)
             ui.height = h
             popover.contentSize = NSSize(width: 400, height: h)
+            dashStore.copy(from: store)   // 닫혀 있는 동안 바뀐 값을 한 번에 받음
             Clock.shared.start()   // 열 때 바로 지금 시각으로 다시 그리고, 열려 있는 동안 30초마다
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
@@ -1111,7 +1142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     func makeDashboard() -> NSViewController {
         let host = NSHostingController(rootView: DashboardView(
-            store: store, ui: ui,
+            store: dashStore, ui: ui,
             onRefresh: { [weak self] in self?.refresh() },
             onSettings: { [weak self] in self?.popover.performClose(nil); self?.openSettings() },
             onQuit: { NSApp.terminate(nil) }))
@@ -1139,7 +1170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             store.loading = false
             MainActor.assumeIsolated { snapshot(to: dir) }
         }
-        store.loading = busy
+        if store.loading != busy { store.loading = busy }
     }
 
     @objc func refresh() { refresh(only: nil) }
@@ -1152,7 +1183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             lastStatus[p] = now
             DispatchQueue.global(qos: .utility).async {
                 let st = StatusCheck.check(p)
-                DispatchQueue.main.async { self.store.statuses[p] = st }
+                DispatchQueue.main.async { if self.store.statuses[p] != st { self.store.statuses[p] = st } }
             }
         }
     }
@@ -1169,13 +1200,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             scanning = true
             DispatchQueue.global(qos: .utility).async {
             let t0 = Date()
-            let (c, x) = LocalScan.scanAll()
+            let (c, x, changed) = LocalScan.scanAll()
             if ProcessInfo.processInfo.environment["USAGE_DEBUG"] != nil {
                 print("scan", String(format: "%.1fs", -t0.timeIntervalSinceNow))
             }
             DispatchQueue.main.async {
-                self.store.local[.claude] = c
-                self.store.local[.codex] = x
+                if changed || self.store.local[.claude] == nil {
+                    self.store.local[.claude] = c
+                    self.store.local[.codex] = x
+                }
                 if ProcessInfo.processInfo.environment["USAGE_DEBUG"] != nil {
                     for (p, s) in [(Provider.claude, c), (.codex, x)] {
                         let d = s.day(offset: 0), y = s.day(offset: 1)
@@ -1206,16 +1239,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                             if p.supportsSavedAccounts, let email = q.email {
                                 DispatchQueue.global(qos: .utility).async {
                                     AccountStore.saveIfNeeded(p, email: email)
-                                    DispatchQueue.main.async { self.store.savedAccounts = AccountStore.all }
+                                    let all = AccountStore.all
+                                    DispatchQueue.main.async { if self.store.savedAccounts != all { self.store.savedAccounts = all } }
                                 }
                             }
                         }
-                        self.store.loggedIn[p] = loggedIn
+                        if self.store.loggedIn[p] != loggedIn { self.store.loggedIn[p] = loggedIn }
                         if !loggedIn {   // 로그아웃하면 이전 값을 지움
                             self.store.quotas[p] = nil
                             if p == .claude { ClaudeAPI.forget() }
                         }
-                        self.store.errors[p] = err
+                        if self.store.errors[p] != err { self.store.errors[p] = err }
                         // 429면 5분 동안 이 서비스는 다시 요청하지 않음
                         if err == Net.rateLimitMessage { self.lastFetch[p] = Date().addingTimeInterval(300 - self.interval(p)) }
                         if ProcessInfo.processInfo.environment["USAGE_DEBUG"] != nil {
@@ -1396,6 +1430,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         openSettings()
         return true
+    }
+
+    // 끄기 전에 아직 안 쓴 한도 기록을 씀
+    func applicationWillTerminate(_ notification: Notification) {
+        History.flush(wait: true)
     }
 
     @objc func openWeb(_ sender: NSMenuItem) {
